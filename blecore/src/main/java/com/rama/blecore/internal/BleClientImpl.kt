@@ -6,11 +6,15 @@ import android.content.Context
 import androidx.annotation.RequiresPermission
 import com.rama.blecore.api.BleClient
 import com.rama.blecore.api.BleConfig
+import com.rama.blecore.exceptions.BleError
 import com.rama.blecore.internal.connection.BleConnectionManager
 import com.rama.blecore.internal.connection.BleOperations
 import com.rama.blecore.internal.scanner.BleScanner
+import com.rama.blecore.internal.utils.BleLogger
+import com.rama.blecore.internal.utils.retryIO
 import com.rama.blecore.model.BleConnectionState
 import com.rama.blecore.model.BleDevice
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.Flow
 import java.util.UUID
 
@@ -18,20 +22,31 @@ class BleClientImpl(
     context: Context,
     bluetoothAdapter: BluetoothAdapter,
     config: BleConfig,
-): BleClient {
+) : BleClient {
 
+    init {
+        BleLogger.enableLogging = config.enableLogging
+        BleLogger.d("BleClient initialized with logging = ${config.enableLogging}")
+    }
+
+    private val retryCount = config.retryCount
+    private val retryDelay = config.retryDelayMillis
 
     private val scanner = BleScanner(bluetoothAdapter)
     private val connectionManager = BleConnectionManager(
         context,
         bluetoothAdapter
-    )
-
+    ).apply {
+        configureAutoReconnect(
+            enabled = config.autoReconnect,
+            attempts = config.reconnectAttempts,
+            delayMillis = config.reconnectDelayMillis
+        )
+    }
 
     override fun scanDevices(): Flow<BleDevice> {
         return scanner.scanDevices()
     }
-
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     override fun connect(address: String): Flow<BleConnectionState> {
@@ -47,14 +62,29 @@ class BleClientImpl(
         serviceUUID: UUID,
         characteristicUUID: UUID
     ): ByteArray? {
-        val gatt = connectionManager.getGatt() ?: throw IllegalStateException("Not connected to a device")
+
+        val gatt = connectionManager.getGatt()
+            ?: throw BleError.DeviceDisconnected()
+
+        val service = gatt.getService(serviceUUID)
+            ?: throw BleError.ServiceNotFound()
+
+        val characteristic = service.getCharacteristic(characteristicUUID)
+            ?: throw BleError.CharacteristicNotFound()
+
         val operations = BleOperations(
             gatt = gatt,
             gattCallback = connectionManager.getGattCallback(),
             commandQueue = connectionManager.getCommandQueue()
         )
-        val characteristic = gatt.getService(serviceUUID)?.getCharacteristic(characteristicUUID) ?: return null
-        return operations.readCharacteristic(characteristic)
+
+        return try {
+            retryIO(times = retryCount, delayMillis = retryDelay) {
+                operations.readCharacteristic(characteristic)
+            }
+        } catch (e: TimeoutCancellationException) {
+            throw BleError.OperationTimeout()
+        }
     }
 
     override suspend fun writeCharacteristic(
@@ -62,13 +92,29 @@ class BleClientImpl(
         characteristicUUID: UUID,
         data: ByteArray
     ): Boolean {
-        val gatt = connectionManager.getGatt() ?: throw IllegalStateException("Not connected to a device")
+
+        val gatt = connectionManager.getGatt()
+            ?: throw BleError.DeviceDisconnected()
+
+        val service = gatt.getService(serviceUUID)
+            ?: throw BleError.ServiceNotFound()
+
+        val characteristic = service.getCharacteristic(characteristicUUID)
+            ?: throw BleError.CharacteristicNotFound()
+
         val operations = BleOperations(
             gatt = gatt,
             gattCallback = connectionManager.getGattCallback(),
-            commandQueue = connectionManager.getCommandQueue())
-        val characteristic = gatt.getService(serviceUUID)?.getCharacteristic(characteristicUUID) ?: return false
-        return operations.writeCharacteristic(characteristic, data)
+            commandQueue = connectionManager.getCommandQueue()
+        )
+
+        return try {
+            retryIO(times = retryCount, delayMillis = retryDelay) {
+                operations.writeCharacteristic(characteristic, data)
+            }
+        } catch (e: TimeoutCancellationException) {
+            throw BleError.OperationTimeout()
+        } == true
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
@@ -76,7 +122,9 @@ class BleClientImpl(
         serviceUUID: UUID,
         characteristicUUID: UUID
     ): Flow<ByteArray> {
-        connectionManager.enableNotifications(serviceUUID,characteristicUUID)
+
+        connectionManager.enableNotifications(serviceUUID, characteristicUUID)
+
         return connectionManager.observeCharacteristic()
     }
 }

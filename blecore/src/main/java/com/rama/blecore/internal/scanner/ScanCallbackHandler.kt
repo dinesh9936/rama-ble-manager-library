@@ -4,6 +4,7 @@ import android.Manifest
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import androidx.annotation.RequiresPermission
+import com.rama.blecore.internal.utils.BleLogger
 import com.rama.blecore.model.BleDevice
 
 class ScanCallbackHandler(
@@ -18,6 +19,8 @@ class ScanCallbackHandler(
             address = result.device.address,
             rssi = result.rssi
         )
+
+        BleLogger.d("Found device: ${device.name} (${device.address}) RSSI=${device.rssi}")
 
         onDeviceFound.invoke(device)
     }

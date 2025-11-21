@@ -4,7 +4,7 @@ import android.bluetooth.BluetoothAdapter
 import android.content.Context
 import com.rama.blecore.internal.BleClientImpl
 
-class BleClientFactory {
+object BleClientFactory {
     fun create(
         context: Context,
         config: BleConfig = BleConfig()

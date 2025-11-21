@@ -3,6 +3,7 @@ package com.rama.blecore.internal.scanner
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanSettings
+import com.rama.blecore.internal.utils.BleLogger
 import com.rama.blecore.model.BleDevice
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -13,7 +14,12 @@ class BleScanner (
     private val bluetoothAdapter: BluetoothAdapter
 ){
 
+
     fun scanDevices(): Flow<BleDevice> = callbackFlow{
+
+        BleLogger.d("Starting BLE scan…")
+
+
         val bluetoothLeScanner = bluetoothAdapter.bluetoothLeScanner ?: run {
             close(Throwable("Bluetooth LE Scanner not available"))
             return@callbackFlow
