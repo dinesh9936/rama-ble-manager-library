@@ -18,10 +18,16 @@ sealed class BleScanError(
             errorCode = 1231
         )
 
-    object ScanPermissionMissing :
+    object ScanPermissionMissingAbove12 :
         BleScanError(
-            errorMessage = "Scan permission is required for BLE scanning",
-            errorCode = 1232
+            errorMessage = "Scan permissions (Location and NearByDevice) is required for BLE scanning",
+            errorCode = 12320
+        )
+
+    object ScanPermissionMissingBelow13 :
+        BleScanError(
+            errorMessage = "Scan permissions (Location) is required for BLE scanning",
+            errorCode = 12321
         )
 
     class InvalidServiceUUID(val uuid: String) :

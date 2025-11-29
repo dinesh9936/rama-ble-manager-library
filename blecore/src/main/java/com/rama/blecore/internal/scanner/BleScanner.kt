@@ -135,13 +135,13 @@ class BleScanner (
     }
 
 
-    private fun hasScanPermission(): Boolean {
+    private fun hasScanPermission(): Pair<Boolean, Boolean> {
         return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-            context.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) ==
-                    PackageManager.PERMISSION_GRANTED
+            Pair<(context.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) ==
+                    PackageManager.PERMISSION_GRANTED), true>
         } else {
-            context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
-                    PackageManager.PERMISSION_GRANTED
+            Pair<(context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
+                    PackageManager.PERMISSION_GRANTED), false>
         }
     }
 
