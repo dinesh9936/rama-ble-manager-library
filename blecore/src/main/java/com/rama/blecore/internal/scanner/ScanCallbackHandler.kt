@@ -23,6 +23,9 @@ class ScanCallbackHandler(
         )
 
         BleLogger.d("Found device: ${device.name} (${device.address}) RSSI=${device.rssi}")
+        deviceServiceUUID?.forEach {serviceUUID->
+            BleLogger.d("Service UUID is $serviceUUID")
+        }
 
         onDeviceFound.invoke(device)
     }

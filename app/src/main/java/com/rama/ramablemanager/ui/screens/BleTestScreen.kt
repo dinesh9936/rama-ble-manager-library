@@ -59,7 +59,7 @@ fun BleTestScreen() {
             // Start scanning
             CoroutineScope(Dispatchers.Main).launch {
                 bleClient.scanDevices(
-                    scanTimeout = 2000
+                    scanServiceUUID = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
                 ).catch { e ->
                     if (e is BleScanError) {
                         Log.e(TAG, "BleTestScreen: ${e.message} and ${e.errorCode}")

@@ -20,7 +20,25 @@ This library allows you to scan for BLE devices with multiple customizable optio
    ```kotlin
        CoroutineScope(Dispatchers.Main).launch {
                 bleClient.scanDevices(
-                    scanTimeout = 2000
+                    scanTimeout = 2_000L // You can pass this time in milliseconds or default is 10_000 miliseconds. 
+                ).catch { e ->
+                    if (e is BleScanError) {
+                        Log.e(TAG, "BleTestScreen: ${e.message} and ${e.errorCode}") // Here you will get errorMessage and errorCode before start scan.
+                    }else{
+                        Log.e(TAG, "BleTestScreen: ${e.message}")  // Here you can get unHandled error
+                    }
+                }.collect { device ->
+                    Log.d(TAG, "BleTestScreen: ${device.name}") // Here you can get device one by one during scan.
+                }
+            }
+
+
+2. **Scan for devices with a specific service UUID**  
+   Helps you discover only the BLE devices that offer the service you need.
+    ```kotlin
+        CoroutineScope(Dispatchers.Main).launch {
+                bleClient.scanDevices(
+                    scanServiceUUID = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"  // Here you can pass you device service UUID to scan only your device.
                 ).catch { e ->
                     if (e is BleScanError) {
                         Log.e(TAG, "BleTestScreen: ${e.message} and ${e.errorCode}")
@@ -31,10 +49,6 @@ This library allows you to scan for BLE devices with multiple customizable optio
                     Log.d(TAG, "BleTestScreen: ${device.name}")
                 }
             }
-
-
-2. **Scan for devices with a specific service UUID**  
-   Helps you discover only the BLE devices that offer the service you need.
 
 3. **Scan for devices with names starting with a specific prefix**  
    Useful when targeting devices with naming patterns (e.g., *"BLE_"*, *"MyDevice"*).
