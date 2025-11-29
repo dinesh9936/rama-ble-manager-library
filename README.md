@@ -15,7 +15,7 @@ This library allows you to scan for BLE devices with multiple customizable optio
 
 ### Scan with the following parameters:
 
-1. **You have to create a bleClient of BleClient class
+1. **You have to create a bleClient of BleClient class**
    ````kotlin
    val bleClient = BleClientFactory.create(context, BleConfig()) 
    // Here context is you activity context and BleConfig is configuration class 
