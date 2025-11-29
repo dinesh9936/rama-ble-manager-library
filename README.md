@@ -1,4 +1,4 @@
-# BLE Helper Library
+# BLE Helper Library (Android)
 A simple and beginner-friendly Bluetooth Low Energy (BLE) library that makes BLE-related tasks easier for Android native developers.
 
 ## About
