@@ -16,7 +16,22 @@ This library allows you to scan for BLE devices with multiple customizable optio
 ### Scan with the following parameters:
 
 1. **Scan with timeout**  
-   Start scanning and automatically stop after a specified duration.
+   Start scanning and automatically stop after a specified duration and default time out is 10 seconds.
+   ```kotlin
+       CoroutineScope(Dispatchers.Main).launch {
+                bleClient.scanDevices(
+                    scanTimeout = 2000
+                ).catch { e ->
+                    if (e is BleScanError) {
+                        Log.e(TAG, "BleTestScreen: ${e.message} and ${e.errorCode}")
+                    }else{
+                        Log.e(TAG, "BleTestScreen: ${e.message}")
+                    }
+                }.collect { device ->
+                    Log.d(TAG, "BleTestScreen: ${device.name}")
+                }
+            }
+
 
 2. **Scan for devices with a specific service UUID**  
    Helps you discover only the BLE devices that offer the service you need.

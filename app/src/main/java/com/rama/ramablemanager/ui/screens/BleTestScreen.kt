@@ -59,25 +59,15 @@ fun BleTestScreen() {
             // Start scanning
             CoroutineScope(Dispatchers.Main).launch {
                 bleClient.scanDevices(
-                    scanTimeout = 2000,
-                    deviceName = "MIJ00100052",
-                    isDeviceNamePrefix = false
+                    scanTimeout = 2000
                 ).catch { e ->
                     if (e is BleScanError) {
-                        val msg = e.errorMessage
-                        val code = e.errorCode
-                        Log.e(TAG, "BleTestScreen: $msg")
-                        Log.e(TAG, "BleTestScreen: $code")
+                        Log.e(TAG, "BleTestScreen: ${e.message} and ${e.errorCode}")
                     }else{
                         Log.e(TAG, "BleTestScreen: ${e.message}")
                     }
-                }
-
-                    .collect { device ->
-
-                    if (devices.none { it.address == device.address }) {
-                        devices.add(device)
-                    }
+                }.collect { device ->
+                    Log.d(TAG, "BleTestScreen: ${device.name}")
                 }
             }
         }) {
