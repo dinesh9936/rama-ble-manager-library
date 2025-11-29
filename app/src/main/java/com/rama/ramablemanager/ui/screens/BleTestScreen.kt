@@ -36,15 +36,12 @@ fun BleTestScreen() {
 
     val context = LocalContext.current
 
+    val bleClient = BleClientFactory.create(context, BleConfig())
+
     val bleClient = remember {
         BleClientFactory.create(
             context = context,
-            config = BleConfig(
-                enableLogging = true,
-                autoReconnect = true,
-                reconnectAttempts = 3,
-                reconnectDelayMillis = 1000
-            )
+            config = BleConfig()
         )
     }
 

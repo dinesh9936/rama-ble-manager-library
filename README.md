@@ -15,7 +15,13 @@ This library allows you to scan for BLE devices with multiple customizable optio
 
 ### Scan with the following parameters:
 
-1. **Scan with timeout**  
+1. **You have to create a bleClient of BleClient class
+   ````kotlin
+   val bleClient = BleClientFactory.create(context, BleConfig()) 
+   // Here context is you activity context and BleConfig is configuration class 
+   // you can pass configuration through this class.
+
+2. **Scan with timeout**  
    Start scanning and automatically stop after a specified duration and default time out is 10 seconds.
    ```kotlin
        CoroutineScope(Dispatchers.Main).launch {
@@ -33,7 +39,7 @@ This library allows you to scan for BLE devices with multiple customizable optio
             }
 
 
-2. **Scan for devices with a specific service UUID**  
+3. **Scan for devices with a specific service UUID**  
    Helps you discover only the BLE devices that offer the service you need.
     ```kotlin
         CoroutineScope(Dispatchers.Main).launch {
@@ -50,7 +56,7 @@ This library allows you to scan for BLE devices with multiple customizable optio
                 }
             }
 
-3. **Scan for devices with names starting with a specific prefix or by passing full name of device**  
+4. **Scan for devices with names starting with a specific prefix or by passing full name of device**  
      Useful when targeting devices with naming patterns (e.g., *"BLE_"*, *"MyDevice"*).
      ````kotlin
          // If you want to scan all devices which has prefix then pass device name with prefix and pass isDeviceNamePrefix as true
@@ -69,9 +75,9 @@ This library allows you to scan for BLE devices with multiple customizable optio
                       Log.d(TAG, "BleTestScreen: ${device.name}")
                   }
               }
-4. **Check Bluetooth of device is enabled or not before scan.**
+5. **Check Bluetooth of device is enabled or not before scan.**
    We will check Bluetooth enabled or not before start scan and return error message and error code.
 
-5. **Check Scan permission allowed or not before scan.**
+6. **Check Scan permission allowed or not before scan.**
    We will check Scan permission allowed or not before start scan and return error message and error code.
 
