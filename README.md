@@ -1,11 +1,14 @@
 # BLE Helper Library (Android)
-A simple and beginner-friendly Bluetooth Low Energy (BLE) library that makes BLE-related tasks easier for Android native developers.
+
+A simple and beginner-friendly Bluetooth Low Energy (BLE) library that makes BLE-related tasks
+easier for Android native developers.
 
 ## About
 
 This library is built to simplify **Bluetooth Low Energy (BLE)** development on Android.  
 Android’s BLE APIs are known to be complex and require a lot of boilerplate code.  
-This library abstracts the difficult parts and provides **clean, high-level APIs** for common BLE operations.
+This library abstracts the difficult parts and provides **clean, high-level APIs** for common BLE
+operations.
 
 ---
 
@@ -20,9 +23,19 @@ This library allows you to scan for BLE devices with multiple customizable optio
    val bleClient = BleClientFactory.create(context, BleConfig()) 
    // Here context is you activity context and BleConfig is configuration class 
    // you can pass configuration through this class.
+   // val bleConfig = BleConfig(
+   //           val scanPeriodMillis: Long = 10_000L,
+   //           val autoReconnect: Boolean = false,
+   //           val enableLogging: Boolean = true,
+   //           val retryCount: Int = 2,
+   //           val retryDelayMillis: Long = 150L,
+   //           val reconnectAttempts: Int = 3,
+   //           val reconnectDelayMillis: Long = 1000L
+   //          )
 
 2. **Scan with timeout**  
-   Start scanning and automatically stop after a specified duration and default time out is 10 seconds.
+   Start scanning and automatically stop after a specified duration and default time out is 10
+   seconds.
    ```kotlin
        CoroutineScope(Dispatchers.Main).launch {
                 bleClient.scanDevices(
@@ -56,8 +69,9 @@ This library allows you to scan for BLE devices with multiple customizable optio
                 }
             }
 
-4. **Scan for devices with names starting with a specific prefix or by passing full name of device**  
-     Useful when targeting devices with naming patterns (e.g., *"BLE_"*, *"MyDevice"*).
+4. **Scan for devices with names starting with a specific prefix or by passing full name of device
+   **  
+   Useful when targeting devices with naming patterns (e.g., *"BLE_"*, *"MyDevice"*).
      ````kotlin
          // If you want to scan all devices which has prefix then pass device name with prefix and pass isDeviceNamePrefix as true
          // If you want to scan only specific device then pass deviceName and isDeviceNamePrefix as false
@@ -79,5 +93,6 @@ This library allows you to scan for BLE devices with multiple customizable optio
    We will check Bluetooth enabled or not before start scan and return error message and error code.
 
 6. **Check Scan permission allowed or not before scan.**
-   We will check Scan permission allowed or not before start scan and return error message and error code.
+   We will check Scan permission allowed or not before start scan and return error message and error
+   code.
 
