@@ -24,4 +24,9 @@ This library allows you to scan for BLE devices with multiple customizable optio
 3. **Scan for devices with names starting with a specific prefix**  
    Useful when targeting devices with naming patterns (e.g., *"BLE_"*, *"MyDevice"*).
 
----
+4. **Check Bluetooth of device is enabled or not before scan.
+   We will check Bluetooth enabled or not before start scan and return error message and error code.
+
+5. **Check Scan permission allowed or not before scan.
+   We will check Scan permission allowed or not before start scan and return error message and error code.
+
