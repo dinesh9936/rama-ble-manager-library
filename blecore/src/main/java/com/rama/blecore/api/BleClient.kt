@@ -6,7 +6,7 @@ import kotlinx.coroutines.flow.Flow
 import java.util.UUID
 
 interface BleClient {
-    fun scanDevices(): Flow<BleDevice>
+    fun scanDevices(scanServiceUUID: String = "", scanTimeout: Long = 5_000L, deviceNameStartWith: String = ""): Flow<BleDevice>
     fun connect(address: String): Flow<BleConnectionState>
     fun disconnect()
     suspend fun readCharacteristic(serviceUUID: UUID, characteristicUUID: UUID): ByteArray?

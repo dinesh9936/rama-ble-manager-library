@@ -8,6 +8,4 @@ data class BleConfig(
     val retryDelayMillis: Long = 150L,
     val reconnectAttempts: Int = 3,
     val reconnectDelayMillis: Long = 1000L
-
-
 )

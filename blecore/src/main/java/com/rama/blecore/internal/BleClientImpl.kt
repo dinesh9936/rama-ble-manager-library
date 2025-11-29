@@ -32,7 +32,7 @@ class BleClientImpl(
     private val retryCount = config.retryCount
     private val retryDelay = config.retryDelayMillis
 
-    private val scanner = BleScanner(bluetoothAdapter)
+    private val scanner = BleScanner(bluetoothAdapter, context)
     private val connectionManager = BleConnectionManager(
         context,
         bluetoothAdapter
@@ -44,8 +44,17 @@ class BleClientImpl(
         )
     }
 
-    override fun scanDevices(): Flow<BleDevice> {
-        return scanner.scanDevices()
+    @RequiresPermission(Manifest.permission.BLUETOOTH_SCAN)
+    override fun scanDevices(
+        scanServiceUUID: String,
+        scanTimeout: Long,
+        deviceNameStartWith: String
+    ): Flow<BleDevice> {
+        return scanner.scanDevices(
+            scanTimeout = scanTimeout,
+            scanServiceUUID = scanServiceUUID,
+            deviceNameStartWith = deviceNameStartWith
+        )
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)

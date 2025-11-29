@@ -1,5 +1,6 @@
 package com.rama.ramablemanager.ui.screens
 
+import android.util.Log
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -20,14 +21,18 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.rama.blecore.api.BleClientFactory
 import com.rama.blecore.api.BleConfig
+import com.rama.blecore.exceptions.BleScanError
 import com.rama.blecore.model.BleConnectionState
 import com.rama.blecore.model.BleDevice
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
 
 @Composable
 fun BleTestScreen() {
+
+    val TAG = "BleTestScreen"
 
     val context = LocalContext.current
 
@@ -46,12 +51,28 @@ fun BleTestScreen() {
     val devices = remember { mutableStateListOf<BleDevice>() }
     val connectionState = remember { mutableStateOf<BleConnectionState?>(null) }
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
+    Column(Modifier
+        .fillMaxSize()
+        .padding(16.dp)) {
 
         Button(onClick = {
             // Start scanning
             CoroutineScope(Dispatchers.Main).launch {
-                bleClient.scanDevices().collect { device ->
+                bleClient.scanDevices(
+                    scanTimeout = 5000,
+                ).catch { e ->
+                    if (e is BleScanError) {
+                        val msg = e.errorMessage
+                        val code = e.errorCode
+                        Log.e(TAG, "BleTestScreen: $msg")
+                        Log.e(TAG, "BleTestScreen: $code")
+                    }else{
+                        Log.e(TAG, "BleTestScreen: ${e.message}")
+                    }
+                }
+
+                    .collect { device ->
+
                     if (devices.none { it.address == device.address }) {
                         devices.add(device)
                     }

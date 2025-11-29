@@ -14,6 +14,5 @@ suspend fun <T> retryIO(
         BleLogger.w("Retrying BLE op… attempt=${attempt + 1}")
         delay(delayMillis)
     }
-    // Last attempt (must return even if null)
     return action()
 }
