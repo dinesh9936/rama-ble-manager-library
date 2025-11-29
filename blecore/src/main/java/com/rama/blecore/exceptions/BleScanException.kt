@@ -20,7 +20,7 @@ sealed class BleScanError(
 
     object ScanPermissionMissingAbove12 :
         BleScanError(
-            errorMessage = "Scan permissions (Location and NearByDevice) is required for BLE scanning",
+            errorMessage = "Scan permissions (NearByDevice) is required for BLE scanning",
             errorCode = 12320
         )
 

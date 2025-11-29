@@ -33,31 +33,35 @@ This library allows you to scan for BLE devices with multiple customizable optio
    //           val reconnectDelayMillis: Long = 1000L
    //          )
 
-2. **Scan with timeout**  
-   Start scanning and automatically stop after a specified duration and default time out is 10
-   seconds.
-   ```kotlin
-       CoroutineScope(Dispatchers.Main).launch {
-                bleClient.scanDevices(
-                    scanTimeout = 2_000L // You can pass this time in milliseconds or default is 10_000 miliseconds. 
-                ).catch { e ->
-                    if (e is BleScanError) {
-                        Log.e(TAG, "BleTestScreen: ${e.message} and ${e.errorCode}") // Here you will get errorMessage and errorCode before start scan.
-                    }else{
-                        Log.e(TAG, "BleTestScreen: ${e.message}")  // Here you can get unHandled error
-                    }
-                }.collect { device ->
-                    Log.d(TAG, "BleTestScreen: ${device.name}") // Here you can get device one by one during scan.
-                }
-            }
+ 2. **Scan with timeout**  
+      Start scanning and automatically stop after a specified duration and default time out is 10
+      seconds.
+      ```kotlin
+          // You can pass timeout in milliseconds
+          // default timeout is 10_000L  
+          CoroutineScope(Dispatchers.Main).launch {
+                   bleClient.scanDevices(
+                       scanTimeout = 2_000L 
+                   ).catch { e ->
+                       if (e is BleScanError) {
+                           Log.e(TAG, "BleTestScreen: ${e.message} and ${e.errorCode}") 
+                       }else{
+                           Log.e(TAG, "BleTestScreen: ${e.message}")
+                       }
+                   }.collect { device ->
+                       Log.d(TAG, "BleTestScreen: ${device.name}")
+                   }
+               }
 
 
 3. **Scan for devices with a specific service UUID**  
    Helps you discover only the BLE devices that offer the service you need.
     ```kotlin
+        // Here you can pass you device service UUID to scan only your device.
+        // ByDefault is scan all devices
         CoroutineScope(Dispatchers.Main).launch {
                 bleClient.scanDevices(
-                    scanServiceUUID = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"  // Here you can pass you device service UUID to scan only your device.
+                    scanServiceUUID = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" 
                 ).catch { e ->
                     if (e is BleScanError) {
                         Log.e(TAG, "BleTestScreen: ${e.message} and ${e.errorCode}")
@@ -91,8 +95,19 @@ This library allows you to scan for BLE devices with multiple customizable optio
               }
 5. **Check Bluetooth of device is enabled or not before scan.**
    We will check Bluetooth enabled or not before start scan and return error message and error code.
+   ````kotlin
+      // When Bluetooth of you device is disabled then it will return 
+      // Error (message = Bluetooth is disabled , code = 1230)
+      // Here you can show warning message to enable Bluetooth device.
 
 6. **Check Scan permission allowed or not before scan.**
    We will check Scan permission allowed or not before start scan and return error message and error
    code.
+   ````kotlin
+       // Required permission before scan 
+       // 1- NearByDevice for android version above 12 if not allowed ->
+       //    Error(msg = Scan permissions (NearByDevice) is required for BLE scanning, code = 12320) 
+       // 2- Location for android below 13
+       //    Error(msg = Scan permissions (Location) is required for BLE scanning, code = 12321) 
+       
 
