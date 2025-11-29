@@ -9,11 +9,11 @@ This library abstracts the difficult parts and provides **clean, high-level APIs
 
 ---
 
-## 🔍 Scan Features
+## Scan Features
 
 This library allows you to scan for BLE devices with multiple customizable options:
 
-### ✔ Scan with the following parameters:
+### Scan with the following parameters:
 
 1. **Scan with timeout**  
    Start scanning and automatically stop after a specified duration.
