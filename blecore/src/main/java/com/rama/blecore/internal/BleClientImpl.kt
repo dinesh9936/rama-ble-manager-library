@@ -48,12 +48,14 @@ class BleClientImpl(
     override fun scanDevices(
         scanServiceUUID: String,
         scanTimeout: Long,
-        deviceNameStartWith: String
+        deviceName: String,
+        isDeviceNamePrefix: Boolean
     ): Flow<BleDevice> {
         return scanner.scanDevices(
             scanTimeout = scanTimeout,
             scanServiceUUID = scanServiceUUID,
-            deviceNameStartWith = deviceNameStartWith
+            deviceName = deviceName,
+            isDeviceNamePrefix = isDeviceNamePrefix
         )
     }
 

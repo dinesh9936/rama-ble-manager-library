@@ -14,10 +14,12 @@ class ScanCallbackHandler(
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     override fun onScanResult(callbackType: Int, result: ScanResult?) {
         result ?: return
+        val deviceServiceUUID = result.scanRecord?.serviceUuids
         val device = BleDevice(
             name = result.device.name ?: "Unknown",
             address = result.device.address,
-            rssi = result.rssi
+            rssi = result.rssi,
+            serviceUUID = deviceServiceUUID
         )
 
         BleLogger.d("Found device: ${device.name} (${device.address}) RSSI=${device.rssi}")
@@ -29,10 +31,12 @@ class ScanCallbackHandler(
     override fun onBatchScanResults(results: List<ScanResult?>?) {
         results?.forEach  { result ->
             result ?: return@forEach
+            val deviceServiceUUID = result.scanRecord?.serviceUuids
             val device = BleDevice(
                 name = result.device.name ?: "Unknown",
                 address = result.device.address,
-                rssi = result.rssi
+                rssi = result.rssi,
+                serviceUUID = deviceServiceUUID
             )
             onDeviceFound.invoke(device)
         }

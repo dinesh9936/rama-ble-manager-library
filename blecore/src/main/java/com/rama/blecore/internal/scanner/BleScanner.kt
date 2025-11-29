@@ -28,11 +28,12 @@ class BleScanner (
     fun scanDevices(
         scanServiceUUID: String = "",
         scanTimeout: Long = 5_000L,
-        deviceNameStartWith: String = ""
+        deviceName: String = "",
+        isDeviceNamePrefix: Boolean = false
     ): Flow<BleDevice> = callbackFlow {
 
         try {
-            validateScanRequirements(scanServiceUUID, deviceNameStartWith)
+            validateScanRequirements(scanServiceUUID, deviceName)
         } catch (e: BleScanError) {
             close(e)
             return@callbackFlow
@@ -60,10 +61,10 @@ class BleScanner (
             }
         }
 
-        if (deviceNameStartWith.isNotEmpty()) {
+        if (deviceName.isNotEmpty() && !isDeviceNamePrefix){
             filters.add(
                 ScanFilter.Builder()
-                    .setDeviceName(deviceNameStartWith)
+                    .setDeviceName(deviceName)
                     .build()
             )
         }
@@ -75,10 +76,9 @@ class BleScanner (
 
         val callback = ScanCallbackHandler { result ->
 
-            BleLogger.d("Scan Result $result")
-            if (deviceNameStartWith.isNotEmpty()) {
+            if (deviceName.isNotEmpty() && isDeviceNamePrefix) {
                 val name = result.name
-                if (!name.startsWith(deviceNameStartWith, ignoreCase = true)) {
+                if (!name.startsWith(deviceName, ignoreCase = true)) {
                     return@ScanCallbackHandler
                 }
             }
@@ -113,8 +113,10 @@ class BleScanner (
             throw BleScanError.BluetoothDisabled
         }
 
-        if (!hasScanPermission()) {
-            throw BleScanError.ScanPermissionMissing
+        val permissionCheck = hasScanPermission()
+        if (!permissionCheck.first){
+            if (permissionCheck.second) throw BleScanError.ScanPermissionMissingAbove12
+            else throw BleScanError.ScanPermissionMissingBelow13
         }
 
         if (serviceUuid.isNotEmpty()) {
@@ -137,13 +139,12 @@ class BleScanner (
 
     private fun hasScanPermission(): Pair<Boolean, Boolean> {
         return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-            Pair<(context.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) ==
-                    PackageManager.PERMISSION_GRANTED), true>
+            val isGranted = context.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
+             Pair(isGranted, true)
         } else {
-            Pair<(context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
-                    PackageManager.PERMISSION_GRANTED), false>
+            val isGranted = context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            Pair(isGranted, false)
         }
     }
-
 
 }

@@ -59,7 +59,9 @@ fun BleTestScreen() {
             // Start scanning
             CoroutineScope(Dispatchers.Main).launch {
                 bleClient.scanDevices(
-                    scanTimeout = 5000,
+                    scanTimeout = 2000,
+                    deviceName = "MIJ00100052",
+                    isDeviceNamePrefix = false
                 ).catch { e ->
                     if (e is BleScanError) {
                         val msg = e.errorMessage
