@@ -50,9 +50,25 @@ This library allows you to scan for BLE devices with multiple customizable optio
                 }
             }
 
-3. **Scan for devices with names starting with a specific prefix**  
-   Useful when targeting devices with naming patterns (e.g., *"BLE_"*, *"MyDevice"*).
-
+3. **Scan for devices with names starting with a specific prefix or by passing full name of device**  
+     Useful when targeting devices with naming patterns (e.g., *"BLE_"*, *"MyDevice"*).
+     ````kotlin
+         // If you want to scan all devices which has prefix then pass device name with prefix and pass isDeviceNamePrefix as true
+         // If you want to scan only specific device then pass deviceName and isDeviceNamePrefix as false
+          CoroutineScope(Dispatchers.Main).launch {
+                  bleClient.scanDevices(
+                    deviceName = "BLE_",  
+                    isDeviceNamePrefix = true
+                  ).catch { e ->
+                      if (e is BleScanError) {
+                          Log.e(TAG, "BleTestScreen: ${e.message} and ${e.errorCode}")
+                      }else{
+                          Log.e(TAG, "BleTestScreen: ${e.message}")
+                      }
+                  }.collect { device ->
+                      Log.d(TAG, "BleTestScreen: ${device.name}")
+                  }
+              }
 4. **Check Bluetooth of device is enabled or not before scan.**
    We will check Bluetooth enabled or not before start scan and return error message and error code.
 
