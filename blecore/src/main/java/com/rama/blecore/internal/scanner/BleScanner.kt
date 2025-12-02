@@ -10,12 +10,11 @@ import android.os.ParcelUuid
 import androidx.annotation.RequiresPermission
 import com.rama.blecore.exceptions.BleScanError
 import com.rama.blecore.internal.utils.BleLogger
-import com.rama.blecore.model.BleDevice
+import com.rama.blecore.model.BleScanState
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -30,19 +29,23 @@ class BleScanner (
         scanTimeout: Long = 5_000L,
         deviceName: String = "",
         isDeviceNamePrefix: Boolean = false
-    ): Flow<BleDevice> = callbackFlow {
+    ): Flow<BleScanState> = callbackFlow {
 
         try {
             validateScanRequirements(scanServiceUUID, deviceName)
         } catch (e: BleScanError) {
+            trySend(BleScanState.Error(e))
             close(e)
             return@callbackFlow
         }
+        trySend(BleScanState.Started)
 
         BleLogger.d("Starting BLE scan…")
 
         val bluetoothLeScanner = bluetoothAdapter.bluetoothLeScanner ?: run {
-            close(Throwable("Bluetooth LE Scanner not available"))
+            val error = BleScanError.ScannerNotAvailable
+            trySend(BleScanState.Error(error))
+            close(error)
             return@callbackFlow
         }
 
@@ -75,14 +78,14 @@ class BleScanner (
             .build()
 
         val callback = ScanCallbackHandler { result ->
-
+            trySend(BleScanState.Scanning)
             if (deviceName.isNotEmpty() && isDeviceNamePrefix) {
                 val name = result.name
                 if (!name.startsWith(deviceName, ignoreCase = true)) {
                     return@ScanCallbackHandler
                 }
             }
-            trySend(result)
+            trySend(BleScanState.DeviceFound(result))
         }
 
         // Start scan
@@ -92,6 +95,7 @@ class BleScanner (
         val job = launch {
             delay(scanTimeout)
             BleLogger.d("Scan timeout reached → stopping scan…")
+            trySend(BleScanState.Timeout)
             bluetoothLeScanner.stopScan(callback)
             close()
         }
@@ -101,6 +105,7 @@ class BleScanner (
             job.cancel()
             bluetoothLeScanner.stopScan(callback)
             BleLogger.d("Scan stopped.")
+            trySend(BleScanState.Stopped)
         }
     }
 

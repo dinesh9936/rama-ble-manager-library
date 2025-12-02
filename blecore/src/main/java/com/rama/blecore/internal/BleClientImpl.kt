@@ -14,6 +14,7 @@ import com.rama.blecore.internal.utils.BleLogger
 import com.rama.blecore.internal.utils.retryIO
 import com.rama.blecore.model.BleConnectionState
 import com.rama.blecore.model.BleDevice
+import com.rama.blecore.model.BleScanState
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.Flow
 import java.util.UUID
@@ -50,7 +51,7 @@ class BleClientImpl(
         scanTimeout: Long,
         deviceName: String,
         isDeviceNamePrefix: Boolean
-    ): Flow<BleDevice> {
+    ): Flow<BleScanState> {
         return scanner.scanDevices(
             scanTimeout = scanTimeout,
             scanServiceUUID = scanServiceUUID,
