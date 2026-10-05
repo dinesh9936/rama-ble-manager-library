@@ -1,10 +1,12 @@
 package com.rama.blecore.client
 
 import android.content.Context
+import com.rama.blecore.environment.BleEnvironmentPolicy
 import com.rama.blecore.internal.adapter.AndroidBluetoothAdapterProvider
 import com.rama.blecore.internal.client.AndroidBleClient
 import com.rama.blecore.internal.connection.AndroidBleConnector
 import com.rama.blecore.internal.environment.AndroidBleEnvironmentChecker
+import com.rama.blecore.internal.environment.AndroidBleEnvironmentPolicy
 import com.rama.blecore.internal.permission.AndroidBlePermissionChecker
 import com.rama.blecore.internal.permission.AndroidBlePermissionProvider
 import com.rama.blecore.internal.scan.AndroidBleScanner
@@ -16,7 +18,8 @@ object BleClientFactory {
     fun create(
         context: Context,
         config: BleClientConfig = BleClientConfig(),
-        permissionProvider: BlePermissionProvider? = null
+        permissionProvider: BlePermissionProvider? = null,
+        environmentPolicy: BleEnvironmentPolicy? = null
     ): BleClient {
 
         val appContext =
@@ -25,6 +28,10 @@ object BleClientFactory {
         val actualPermissionProvider =
             permissionProvider
                 ?: AndroidBlePermissionProvider()
+
+        val actualEnvironmentPolicy =
+            environmentPolicy
+                ?: AndroidBleEnvironmentPolicy()
 
         val adapterProvider =
             AndroidBluetoothAdapterProvider(
@@ -41,7 +48,8 @@ object BleClientFactory {
                 context = appContext,
                 adapterProvider = adapterProvider,
                 permissionProvider = actualPermissionProvider,
-                permissionChecker = permissionChecker
+                permissionChecker = permissionChecker,
+                environmentPolicy = actualEnvironmentPolicy
             )
 
         val scanner =
