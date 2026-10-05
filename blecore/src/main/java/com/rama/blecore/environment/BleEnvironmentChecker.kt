@@ -2,5 +2,7 @@ package com.rama.blecore.environment
 
 interface BleEnvironmentChecker {
 
-    fun check(): BleEnvironmentState
+    fun checkScan(): BleEnvironmentState
+
+    fun checkConnect(): BleEnvironmentState
 }

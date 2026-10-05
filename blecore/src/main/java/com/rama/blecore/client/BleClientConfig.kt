@@ -1,6 +1,5 @@
 package com.rama.blecore.client
 
-import com.rama.blecore.retry.BleRetryPolicy
 import com.rama.blecore.timeout.BleTimeoutConfig
 
 

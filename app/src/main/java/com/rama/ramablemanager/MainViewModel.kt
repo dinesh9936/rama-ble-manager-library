@@ -49,7 +49,7 @@ class MainViewModel(
         )
 
         val state =
-            bleClient.environment.check()
+            bleClient.environment.checkScan()
 
         _environment.value =
             state

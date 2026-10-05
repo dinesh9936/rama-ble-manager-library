@@ -21,18 +21,66 @@ internal class AndroidBleEnvironmentChecker(
     private val appContext =
         context.applicationContext
 
-    override fun check(): BleEnvironmentState {
-
+    /**
+     * Checks only the requirements needed for BLE scanning.
+     *
+     * Android 12+:
+     * - BLUETOOTH_SCAN
+     *
+     * Android 11 and below:
+     * - Location permission
+     * - Location service enabled when required
+     */
+    override fun checkScan(): BleEnvironmentState {
         val requiredPermissions =
-            buildRequiredPermissions()
+            permissionProvider
+                .requiredScanPermissions()
+                .distinct()
+
+        val locationRequired =
+            environmentPolicy
+                .isLocationServiceRequired()
+
+        return buildEnvironmentState(
+            requiredPermissions = requiredPermissions,
+            locationServiceRequired = locationRequired
+        )
+    }
+
+    /**
+     * Checks only the requirements needed for connecting
+     * to a BLE device.
+     *
+     * Android 12+:
+     * - BLUETOOTH_CONNECT
+     *
+     * Android 11 and below:
+     * - No runtime Bluetooth connect permission
+     */
+    override fun checkConnect(): BleEnvironmentState {
+        val requiredPermissions =
+            permissionProvider
+                .requiredConnectPermissions()
+                .distinct()
+
+        return buildEnvironmentState(
+            requiredPermissions = requiredPermissions,
+            locationServiceRequired = false
+        )
+    }
+
+    /**
+     * Common environment state builder.
+     */
+    private fun buildEnvironmentState(
+        requiredPermissions: List<String>,
+        locationServiceRequired: Boolean
+    ): BleEnvironmentState {
 
         val missingPermissions =
             permissionChecker.missingPermissions(
                 requiredPermissions
             )
-
-        val locationRequired =
-            environmentPolicy.isLocationServiceRequired()
 
         return BleEnvironmentState(
             bleSupported =
@@ -48,22 +96,13 @@ internal class AndroidBleEnvironmentChecker(
                 missingPermissions,
 
             locationServiceRequired =
-                locationRequired,
+                locationServiceRequired,
 
             locationServiceEnabled =
-                !locationRequired ||
+                !locationServiceRequired ||
                         isLocationServiceEnabled()
         )
     }
-
-    private fun buildRequiredPermissions(): List<String> {
-        return (
-                permissionProvider.requiredScanPermissions() +
-                        permissionProvider.requiredConnectPermissions()
-                )
-            .distinct()
-    }
-
 
     private fun isLocationServiceEnabled(): Boolean {
         val locationManager =
