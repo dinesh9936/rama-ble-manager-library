@@ -11,7 +11,10 @@ import com.rama.blecore.scan.BleScanFilter
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.time.withTimeout
+import kotlinx.coroutines.withTimeout
 import java.util.UUID
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 class MainActivity : ComponentActivity() {
@@ -83,32 +86,13 @@ class MainActivity : ComponentActivity() {
 
         lifecycleScope.launch {
 
-            bleClient
-                .scan(
-                    config = bleScanConfig
-                )
-                .catch { throwable ->
-
-                    Log.e(
-                        TAG,
-                        "Scan failed",
-                        throwable
-                    )
-                }
+            bleClient.scan(config = bleScanConfig)
+                .catch { throwable -> Log.e(TAG, "Scan failed", throwable) }
                 .collect { result ->
-
-                    Log.d(
-                        TAG,
-                        "Device name: ${result.device.name}"
-                    )
-
-                    Log.d(
-                        TAG,
-                        "Device address: ${result.device.address}"
-                    )
+                    Log.d(TAG, "Device name: ${result.device.name}")
+                    Log.d(TAG, "Device address: ${result.device.address}")
                 }
-            delay(5.seconds)
-            bleClient.stopScan()
+
         }
     }
 }
