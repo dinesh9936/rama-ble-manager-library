@@ -1,6 +1,8 @@
+import org.gradle.api.publish.maven.MavenPublication
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
+    id("maven-publish")
 }
 
 android {
@@ -35,10 +37,15 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    publishing {
+        singleVariant("release") {
+            withSourcesJar()
+        }
+    }
 }
 
 dependencies {
-
     implementation(libs.androidx.core.ktx)
 
     implementation(libs.kotlinx.coroutines.core)
@@ -48,4 +55,17 @@ dependencies {
 
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
+}
+afterEvaluate {
+    publishing {
+        publications {
+            register<MavenPublication>("release") {
+                from(components["release"])
+
+                groupId = "com.github.dinesh9936"
+                artifactId = "RamaBleManager"
+                version = "1.0.0"
+            }
+        }
+    }
 }
