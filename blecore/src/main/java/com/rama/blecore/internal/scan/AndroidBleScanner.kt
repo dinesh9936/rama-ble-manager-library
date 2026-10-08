@@ -6,6 +6,7 @@ import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.os.ParcelUuid
+import android.util.Log
 import com.rama.blecore.error.BleError
 import com.rama.blecore.error.BleException
 import com.rama.blecore.internal.adapter.AndroidBluetoothAdapterProvider
@@ -14,6 +15,8 @@ import com.rama.blecore.scan.BleScanMode
 import com.rama.blecore.scan.BleScanResult
 import com.rama.blecore.scan.BleScanner
 import com.rama.blecore.timeout.BleTimeoutConfig
+import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -26,283 +29,498 @@ internal class AndroidBleScanner(
     private val timeoutConfig: BleTimeoutConfig
 ) : BleScanner {
 
+    companion object {
+
+        private const val TAG = "RamaBleScanner"
+
+        private const val SCAN_TOO_FREQUENTLY = 6
+
+        private val scanRateLimiter = BleScanRateLimiter(
+            maxScans = 4,
+            windowMillis = 30_000L
+        )
+    }
+
     private val lock = Any()
 
-    private var activeScanCallback: ScanCallback? = null
+    private data class ActiveScan(
+        val callback: ScanCallback,
+        val channel: SendChannel<BleScanResult>
+    )
 
+    private var activeScan: ActiveScan? = null
+
+    // --------------------------------------------------
+    // START SCANNING
+    // --------------------------------------------------
+
+    @OptIn(DelicateCoroutinesApi::class)
     @SuppressLint("MissingPermission")
     override fun scan(
         config: BleScanConfig
     ): Flow<BleScanResult> = callbackFlow {
 
-        val adapter =
-            adapterProvider.getAdapter()
+        Log.d(TAG, "scan: requested")
+
+        // STEP 1: Check Bluetooth adapter
+
+        val adapter = adapterProvider.getAdapter()
 
         if (adapter == null) {
+
             close(
                 BleException(
                     BleError.BluetoothUnavailable()
                 )
             )
+
             return@callbackFlow
         }
 
         if (!adapter.isEnabled) {
+
             close(
                 BleException(
                     BleError.BluetoothDisabled()
                 )
             )
+
             return@callbackFlow
         }
 
-        val scanner =
-            adapter.bluetoothLeScanner
+        // STEP 2: Get Android BLE scanner
+
+        val scanner = adapter.bluetoothLeScanner
 
         if (scanner == null) {
+
             close(
                 BleException(
                     BleError.ScanFailed(
-                        message =
-                            "Bluetooth LE scanner is unavailable"
+                        message = "Bluetooth LE scanner is unavailable"
                     )
                 )
             )
+
             return@callbackFlow
         }
 
-        val seenDevices =
-            mutableSetOf<String>()
+        // STEP 3: Prepare scan filters and settings
 
-        val callback =
-            object : ScanCallback() {
+        val androidFilters: List<ScanFilter>
+        val androidSettings: ScanSettings
 
-                override fun onScanResult(
-                    callbackType: Int,
-                    result: ScanResult
-                ) {
-                    emitResult(
-                        result = result,
-                        config = config,
-                        seenDevices = seenDevices
+        try {
+
+            androidFilters = config.filters.map(
+                ::toAndroidScanFilter
+            )
+
+            androidSettings = buildScanSettings(config)
+
+        } catch (exception: Exception) {
+
+            close(
+                BleException(
+                    BleError.ScanFailed(
+                        message = "Invalid BLE scan configuration",
+                        cause = exception
                     )
-                }
+                )
+            )
 
-                override fun onBatchScanResults(
-                    results: MutableList<ScanResult>
-                ) {
-                    results.forEach { result ->
-                        emitResult(
-                            result = result,
-                            config = config,
-                            seenDevices = seenDevices
-                        )
+            return@callbackFlow
+        }
+
+        val seenDevices = mutableSetOf<String>()
+
+        // STEP 4: Create scan callback
+
+        val callback = object : ScanCallback() {
+
+            override fun onScanResult(
+                callbackType: Int,
+                result: ScanResult
+            ) {
+
+                emitResult(result)
+            }
+
+            override fun onBatchScanResults(
+                results: MutableList<ScanResult>
+            ) {
+
+                results.forEach { result ->
+                    emitResult(result)
+                }
+            }
+
+            override fun onScanFailed(errorCode: Int) {
+
+                Log.e(
+                    TAG,
+                    "onScanFailed: errorCode=$errorCode"
+                )
+
+                val error = mapScanError(errorCode)
+
+                synchronized(lock) {
+
+                    if (activeScan?.callback === this) {
+                        activeScan = null
                     }
                 }
 
-                override fun onScanFailed(
-                    errorCode: Int
-                ) {
-                    synchronized(lock) {
-                        if (
-                            activeScanCallback === this
-                        ) {
-                            activeScanCallback = null
-                        }
-                    }
+                close(BleException(error))
+            }
 
-                    close(
-                        BleException(
-                            BleError.ScanFailed(
-                                errorCode = errorCode,
-                                message =
-                                    scanErrorMessage(
-                                        errorCode
-                                    )
-                            )
-                        )
-                    )
+            private fun emitResult(
+                result: ScanResult
+            ) {
+
+                if (channel.isClosedForSend) {
+                    return
                 }
 
-                private fun emitResult(
-                    result: ScanResult,
-                    config: BleScanConfig,
-                    seenDevices: MutableSet<String>
-                ) {
-                    val address =
-                        result.device.address
+                try {
+
+                    val address = result.device.address
 
                     if (!config.allowDuplicates) {
-                        val isNew =
+
+                        val isNew = synchronized(seenDevices) {
                             seenDevices.add(address)
+                        }
 
                         if (!isNew) {
                             return
                         }
                     }
 
-                    trySend(
-                        scanResultMapper.map(result)
+                    val mappedResult = scanResultMapper.map(result)
+
+                    trySend(mappedResult)
+
+                } catch (exception: Exception) {
+
+                    Log.e(
+                        TAG,
+                        "emitResult: failed to map scan result",
+                        exception
                     )
                 }
             }
+        }
 
-        synchronized(lock) {
+        // STEP 5: Register and start scan atomically
 
-            activeScanCallback
-                ?.let { previousCallback ->
+        val started = synchronized(lock) {
 
-                    runCatching {
-                        scanner.stopScan(
-                            previousCallback
+            if (activeScan != null) {
+
+                Log.w(
+                    TAG,
+                    "scan: another scan is already active"
+                )
+
+                close(
+                    BleException(
+                        BleError.ScanFailed(
+                            errorCode = ScanCallback.SCAN_FAILED_ALREADY_STARTED,
+                            message = "A BLE scan is already running"
                         )
-                    }
-                }
-
-            activeScanCallback =
-                callback
-        }
-
-        try {
-
-            scanner.startScan(
-                config.filters.map(
-                    ::toAndroidScanFilter
-                ),
-                buildScanSettings(config),
-                callback
-            )
-
-        } catch (
-            securityException: SecurityException
-        ) {
-
-            synchronized(lock) {
-                if (
-                    activeScanCallback ===
-                    callback
-                ) {
-                    activeScanCallback = null
-                }
-            }
-
-            close(
-                BleException(
-                    BleError.PermissionDenied(
-                        permissions =
-                            emptyList(),
-                        message =
-                            "Required BLE scan permission is missing"
                     )
                 )
-            )
 
-            return@callbackFlow
+                false
 
-        } catch (throwable: Throwable) {
+            } else {
 
-            synchronized(lock) {
-                if (
-                    activeScanCallback ===
-                    callback
-                ) {
-                    activeScanCallback = null
-                }
-            }
+                val retryAfterMs = scanRateLimiter.tryAcquire()
 
-            close(
-                BleException(
-                    BleError.ScanFailed(
-                        message =
-                            "Unable to start BLE scan",
-                        cause = throwable
+                if (retryAfterMs != null) {
+
+                    Log.w(
+                        TAG,
+                        "scan: rate limited, retryAfterMs=$retryAfterMs"
                     )
-                )
-            )
 
-            return@callbackFlow
-        }
-
-        val timeoutJob =
-            timeoutConfig.scanTimeout
-                ?.let { timeout ->
-
-                    launch {
-
-                        delay(timeout)
-
-                        runCatching {
-                            scanner.stopScan(
-                                callback
+                    close(
+                        BleException(
+                            BleError.ScanTooFrequently(
+                                retryAfterMs = retryAfterMs
                             )
-                        }
+                        )
+                    )
 
-                        synchronized(lock) {
-                            if (
-                                activeScanCallback ===
-                                callback
-                            ) {
-                                activeScanCallback =
-                                    null
-                            }
-                        }
+                    false
 
-                        close()
+                } else {
+
+                    activeScan = ActiveScan(
+                        callback = callback,
+                        channel = channel
+                    )
+
+                    try {
+
+                        scanner.startScan(
+                            androidFilters,
+                            androidSettings,
+                            callback
+                        )
+
+                        Log.d(
+                            TAG,
+                            "scan: Android BLE scan requested"
+                        )
+
+                        true
+
+                    } catch (exception: SecurityException) {
+
+                        activeScan = null
+
+                        Log.e(
+                            TAG,
+                            "scan: Bluetooth permission denied",
+                            exception
+                        )
+
+                        close(
+                            BleException(
+                                BleError.PermissionDenied(
+                                    permissions = emptyList(),
+                                    message = "Required BLE scan permission is missing"
+                                )
+                            )
+                        )
+
+                        false
+
+                    } catch (exception: Exception) {
+
+                        activeScan = null
+
+                        Log.e(
+                            TAG,
+                            "scan: failed to start",
+                            exception
+                        )
+
+                        close(
+                            BleException(
+                                BleError.ScanFailed(
+                                    message = "Unable to start BLE scan",
+                                    cause = exception
+                                )
+                            )
+                        )
+
+                        false
                     }
                 }
+            }
+        }
+
+        if (!started) {
+            return@callbackFlow
+        }
+
+        // STEP 6: Optional scan timeout
+
+        val timeoutJob = timeoutConfig.scanTimeout?.let { timeout ->
+
+            launch {
+
+                delay(timeout)
+
+                Log.d(
+                    TAG,
+                    "scan: timeout reached"
+                )
+
+                // Closing the channel triggers awaitClose,
+                // which stops the Android scanner.
+                close()
+            }
+        }
+
+        // STEP 7: Cleanup on cancellation,
+        // timeout, error, or manual stop.
 
         awaitClose {
 
             timeoutJob?.cancel()
 
-            runCatching {
-                scanner.stopScan(
-                    callback
-                )
-            }
-
             synchronized(lock) {
-                if (
-                    activeScanCallback ===
-                    callback
-                ) {
-                    activeScanCallback =
-                        null
+
+                if (activeScan?.callback === callback) {
+                    activeScan = null
+                }
+
+                // Stop only this collector's callback.
+                // A newer scan will have a different callback.
+                try {
+
+                    scanner.stopScan(callback)
+
+                    Log.d(
+                        TAG,
+                        "scan: Android BLE scan stopped"
+                    )
+
+                } catch (exception: SecurityException) {
+
+                    Log.w(
+                        TAG,
+                        "scan: permission missing during cleanup",
+                        exception
+                    )
+
+                } catch (exception: Exception) {
+
+                    Log.e(
+                        TAG,
+                        "scan: cleanup failed",
+                        exception
+                    )
                 }
             }
+
+            Log.d(
+                TAG,
+                "scan: Flow closed and resources released"
+            )
         }
     }
+
+    // --------------------------------------------------
+    // STOP SCANNING
+    // --------------------------------------------------
 
     @SuppressLint("MissingPermission")
     override suspend fun stop() {
 
-        val adapter =
-            adapterProvider.getAdapter()
-                ?: return
+        Log.d(TAG, "stop: requested")
 
-        val scanner =
-            adapter.bluetoothLeScanner
-                ?: return
+        val session = synchronized(lock) {
 
-        val callback =
-            synchronized(lock) {
-                activeScanCallback
-                    .also {
-                        activeScanCallback =
-                            null
-                    }
+            activeScan.also {
+                activeScan = null
             }
-                ?: return
+        } ?: run {
+
+            Log.d(TAG, "stop: no active scan")
+
+            return
+        }
+
+        // Stop Android scanning immediately.
+
+        val scanner = runCatching {
+            adapterProvider.getAdapter()?.bluetoothLeScanner
+        }.getOrNull()
 
         try {
-            scanner.stopScan(callback)
-        } catch (
-            _: SecurityException
-        ) {
-            // Permission may have been revoked
-            // while scan was active.
+
+            scanner?.stopScan(session.callback)
+
+        } catch (exception: SecurityException) {
+
+            Log.w(
+                TAG,
+                "stop: permission denied",
+                exception
+            )
+
+        } catch (exception: Exception) {
+
+            Log.e(
+                TAG,
+                "stop: failed",
+                exception
+            )
+        }
+
+        // Complete the Flow of the active scan.
+        // awaitClose handles final cleanup.
+
+        session.channel.close()
+
+        Log.d(TAG, "stop: completed")
+    }
+
+    // --------------------------------------------------
+    // SCAN ERROR MAPPING
+    // --------------------------------------------------
+
+    private fun mapScanError(
+        errorCode: Int
+    ): BleError {
+
+        return when (errorCode) {
+
+            SCAN_TOO_FREQUENTLY -> {
+
+                BleError.ScanTooFrequently(
+                    message = "BLE scanning is being started too frequently"
+                )
+            }
+
+            ScanCallback.SCAN_FAILED_ALREADY_STARTED -> {
+
+                BleError.ScanFailed(
+                    errorCode = errorCode,
+                    message = "BLE scan has already been started"
+                )
+            }
+
+            ScanCallback.SCAN_FAILED_APPLICATION_REGISTRATION_FAILED -> {
+
+                BleError.ScanFailed(
+                    errorCode = errorCode,
+                    message = "BLE scanner application registration failed"
+                )
+            }
+
+            ScanCallback.SCAN_FAILED_INTERNAL_ERROR -> {
+
+                BleError.ScanFailed(
+                    errorCode = errorCode,
+                    message = "Android Bluetooth stack reported an internal scan error"
+                )
+            }
+
+            ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED -> {
+
+                BleError.ScanFailed(
+                    errorCode = errorCode,
+                    message = "Requested BLE scan feature is not supported"
+                )
+            }
+
+            ScanCallback.SCAN_FAILED_OUT_OF_HARDWARE_RESOURCES -> {
+
+                BleError.ScanFailed(
+                    errorCode = errorCode,
+                    message = "BLE hardware resources are unavailable"
+                )
+            }
+
+            else -> {
+
+                BleError.ScanFailed(
+                    errorCode = errorCode,
+                    message = "BLE scan failed with error code $errorCode"
+                )
+            }
         }
     }
+
+    // --------------------------------------------------
+    // SCAN SETTINGS
+    // --------------------------------------------------
 
     private fun buildScanSettings(
         config: BleScanConfig
@@ -310,8 +528,7 @@ internal class AndroidBleScanner(
 
         return ScanSettings.Builder()
             .setScanMode(
-                config.scanMode
-                    .toAndroidScanMode()
+                config.scanMode.toAndroidScanMode()
             )
             .setReportDelay(
                 config.reportDelayMillis
@@ -319,99 +536,57 @@ internal class AndroidBleScanner(
             .build()
     }
 
+    // --------------------------------------------------
+    // SCAN FILTERS
+    // --------------------------------------------------
+
     private fun toAndroidScanFilter(
-        filter:
-        com.rama.blecore.scan.BleScanFilter
+        filter: com.rama.blecore.scan.BleScanFilter
     ): ScanFilter {
 
-        val builder =
-            ScanFilter.Builder()
+        val builder = ScanFilter.Builder()
 
-        filter.deviceName
-            ?.let(builder::setDeviceName)
+        filter.deviceName?.let {
+            builder.setDeviceName(it)
+        }
 
-        filter.deviceAddress
-            ?.let(builder::setDeviceAddress)
+        filter.deviceAddress?.let {
+            builder.setDeviceAddress(it)
+        }
 
-        filter.serviceUuid
-            ?.let {
-                builder.setServiceUuid(
-                    ParcelUuid(it)
-                )
-            }
+        filter.serviceUuid?.let {
+            builder.setServiceUuid(ParcelUuid(it))
+        }
 
-        filter.manufacturerId
-            ?.let { manufacturerId ->
+        filter.manufacturerId?.let { manufacturerId ->
 
-                filter.manufacturerData
-                    ?.let { data ->
+            val data = filter.manufacturerData
 
-                        builder.setManufacturerData(
-                            manufacturerId,
-                            data
-                        )
-                    }
-                    ?: builder
-                        .setManufacturerData(
-                            manufacturerId,
-                            byteArrayOf()
-                        )
-            }
+            builder.setManufacturerData(
+                manufacturerId,
+                data ?: byteArrayOf()
+            )
+        }
 
         return builder.build()
     }
 
-    private fun BleScanMode
-            .toAndroidScanMode(): Int {
+    // --------------------------------------------------
+    // SCAN MODE
+    // --------------------------------------------------
+
+    private fun BleScanMode.toAndroidScanMode(): Int {
 
         return when (this) {
 
             BleScanMode.LOW_POWER ->
-                ScanSettings
-                    .SCAN_MODE_LOW_POWER
+                ScanSettings.SCAN_MODE_LOW_POWER
 
             BleScanMode.BALANCED ->
-                ScanSettings
-                    .SCAN_MODE_BALANCED
+                ScanSettings.SCAN_MODE_BALANCED
 
             BleScanMode.LOW_LATENCY ->
-                ScanSettings
-                    .SCAN_MODE_LOW_LATENCY
-        }
-    }
-
-    private fun scanErrorMessage(
-        errorCode: Int
-    ): String {
-
-        return when (errorCode) {
-
-            ScanCallback
-                .SCAN_FAILED_ALREADY_STARTED ->
-                "BLE scan has already been started"
-
-            ScanCallback
-                .SCAN_FAILED_APPLICATION_REGISTRATION_FAILED ->
-                "BLE scanner application registration failed"
-
-            ScanCallback
-                .SCAN_FAILED_INTERNAL_ERROR ->
-                "Android Bluetooth stack reported an internal scan error"
-
-            ScanCallback
-                .SCAN_FAILED_FEATURE_UNSUPPORTED ->
-                "Requested BLE scan feature is not supported"
-
-            ScanCallback
-                .SCAN_FAILED_OUT_OF_HARDWARE_RESOURCES ->
-                "BLE scan failed because hardware resources are unavailable"
-
-            ScanCallback
-                .SCAN_FAILED_SCANNING_TOO_FREQUENTLY ->
-                "BLE scans are being started too frequently"
-
-            else ->
-                "BLE scan failed with error code $errorCode"
+                ScanSettings.SCAN_MODE_LOW_LATENCY
         }
     }
 }

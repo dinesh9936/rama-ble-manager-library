@@ -2,6 +2,7 @@ package com.rama.ramablemanager
 
 import android.os.Bundle
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -32,6 +33,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import com.rama.blecore.client.BleClientConfig
 import com.rama.blecore.client.BleClientFactory
+import com.rama.blecore.error.BleError
+import com.rama.blecore.error.BleException
 import com.rama.blecore.scan.BleScanConfig
 import com.rama.blecore.scan.BleScanResult
 import com.rama.blecore.timeout.BleTimeoutConfig
@@ -219,14 +222,41 @@ class MainActivity : ComponentActivity() {
                     )
                     .catch { throwable ->
 
-                        Log.e(
-                            TAG,
-                            "Scan failed",
-                            throwable
-                        )
+                        when (throwable) {
 
-                        scanMessage =
-                            "Scan failed: ${throwable.message}"
+                            is BleException -> {
+                                when (val error = throwable.error) {
+
+                                    is BleError.ScanTooFrequently -> {
+                                        Log.e(
+                                            TAG,
+                                            "Scan limited. Retry after " +
+                                                    "${error.retryAfterMs}ms"
+                                        )
+                                        Toast.makeText(this@MainActivity, "Scan limited. Retry after " +
+                                                "${error.retryAfterMs}ms", Toast.LENGTH_LONG).show()
+                                    }
+
+                                    is BleError.ScanFailed -> {
+                                        Log.e(
+                                            TAG,
+                                            "Scan failed: ${error.message}"
+                                        )
+                                    }
+
+                                    else -> {
+                                        Log.e(
+                                            TAG,
+                                            "BLE error: ${error.message}"
+                                        )
+                                    }
+                                }
+                            }
+
+                            else -> {
+                                Log.e(TAG, "Unexpected error", throwable)
+                            }
+                        }
                     }
                     .onCompletion {
 

@@ -5,6 +5,12 @@ sealed class BleError(
     open val cause: Throwable? = null
 ) {
 
+    data class ScanTooFrequently(
+        val retryAfterMs: Long? = null,
+        override val message: String =
+            "BLE scanning started too frequently. Please try again later."
+    ) : BleError(message)
+
     data class BluetoothUnavailable(
         override val message: String =
             "Bluetooth is not available on this device"
