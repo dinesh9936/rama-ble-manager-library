@@ -74,6 +74,8 @@ class MainActivity : ComponentActivity() {
     private var isRunning by mutableStateOf(false)
     private var testMessage by mutableStateOf("Enter a count, then run the test.")
     private val testResults = mutableStateListOf<String>()
+    private val scanTerminal = TerminalLog()
+    private val connectionTerminal = TerminalLog()
 
     private var scanJob: Job? = null
     private var connectJob: Job? = null
@@ -112,6 +114,7 @@ class MainActivity : ComponentActivity() {
                         devices = scannedDevices,
                         isScanning = isScanning,
                         message = scanMessage,
+                        terminal = scanTerminal,
                         onScanClick = ::checkAndStartScan,
                         onStopClick = ::stopBleScan,
                         onDeviceClick = { device ->
@@ -130,6 +133,7 @@ class MainActivity : ComponentActivity() {
                         isRunning = isRunning,
                         message = testMessage,
                         results = testResults,
+                        terminal = connectionTerminal,
                         hasActiveConnection = activeConnection != null,
                         onRunClick = ::checkAndRunConnections,
                         onDisconnectClick = ::disconnectActiveConnection,
@@ -141,6 +145,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun checkAndStartScan() {
+        scanTerminal.add("Checking scan prerequisites")
         val environment = bleClient.environment.checkScan()
         when {
             !environment.bleSupported -> scanMessage = "BLE is not supported."
@@ -154,6 +159,8 @@ class MainActivity : ComponentActivity() {
 
     private fun startBleScan() {
         scanJob?.cancel()
+        scanTerminal.clear()
+        scanTerminal.add("Starting BLE scan")
         scannedDevices.clear()
         isScanning = true
         scanMessage = "Scanning for BLE devices..."
@@ -162,10 +169,12 @@ class MainActivity : ComponentActivity() {
                 .catch { error ->
                     scanMessage = (error as? BleException)?.error?.message
                         ?: error.message ?: "BLE scan failed."
+                    scanTerminal.add(scanMessage, TerminalLevel.ERROR)
                     Log.e(TAG, "Scan error", error)
                 }
                 .onCompletion {
                     isScanning = false
+                    scanTerminal.add("Scan completed: ${scannedDevices.size} devices", TerminalLevel.SUCCESS)
                     if (scanMessage == "Scanning for BLE devices...") {
                         scanMessage = "${scannedDevices.size} devices found."
                     }
@@ -173,12 +182,14 @@ class MainActivity : ComponentActivity() {
                 .collect { result ->
                     if (scannedDevices.none { it.device.address == result.device.address }) {
                         scannedDevices.add(result)
+                        scanTerminal.add("Found ${result.device.name ?: "Unknown"} (${result.device.address}), RSSI=${result.rssi}")
                     }
                 }
         }
     }
 
     private fun stopBleScan() {
+        scanTerminal.add("Scan stop requested", TerminalLevel.WARNING)
         scanJob?.cancel()
         scanJob = null
         lifecycleScope.launch { bleClient.stopScan() }
@@ -208,12 +219,15 @@ class MainActivity : ComponentActivity() {
         val device = selectedDevice ?: return
         if (isRunning) return
         testResults.clear()
+        connectionTerminal.clear()
+        connectionTerminal.add("Starting $count concurrent requests for ${device.address}")
         testMessage = "Starting $count simultaneous connection requests..."
         isRunning = true
         connectJob = lifecycleScope.launch {
             try {
                 val jobs = (1..count).map { attempt ->
                     launch {
+                        connectionTerminal.add("Attempt $attempt: connecting")
                         try {
                             val connection = bleClient.connect(device)
                             // Keep the first successful session alive to test AlreadyConnected.
@@ -221,8 +235,10 @@ class MainActivity : ComponentActivity() {
                             if (activeConnection == null) {
                                 activeConnection = connection
                                 testResults.add("Attempt $attempt: CONNECTED")
+                                connectionTerminal.add("Attempt $attempt: CONNECTED", TerminalLevel.SUCCESS)
                             } else {
                                 testResults.add("Attempt $attempt: DUPLICATE CONNECTION SUCCEEDED")
+                                connectionTerminal.add("Attempt $attempt: duplicate succeeded unexpectedly", TerminalLevel.ERROR)
                                 connection.disconnect()
                             }
                         } catch (cancelled: CancellationException) {
@@ -234,14 +250,17 @@ class MainActivity : ComponentActivity() {
                                 else -> "FAILED: ${error.error.message}"
                             }
                             testResults.add("Attempt $attempt: $label")
+                            connectionTerminal.add("Attempt $attempt: $label", TerminalLevel.WARNING)
                         } catch (error: Exception) {
                             testResults.add("Attempt $attempt: ERROR: ${error.message}")
+                            connectionTerminal.add("Attempt $attempt: ${error.message}", TerminalLevel.ERROR)
                             Log.e(TAG, "Connection attempt $attempt failed", error)
                         }
                     }
                 }
                 jobs.joinAll()
                 testMessage = "Finished $count requests. Review results below."
+                connectionTerminal.add("All $count requests finished")
             } finally {
                 isRunning = false
             }
@@ -252,6 +271,7 @@ class MainActivity : ComponentActivity() {
         val connection = activeConnection ?: return
         lifecycleScope.launch {
             try {
+                connectionTerminal.add("Disconnect requested", TerminalLevel.WARNING)
                 connection.disconnect()
                 testMessage = "Disconnect requested. Wait for GATT cleanup before retesting."
                 // ConnectionState is updated asynchronously by the BLE library.
@@ -261,8 +281,10 @@ class MainActivity : ComponentActivity() {
                 }
                 if (activeConnection === connection) activeConnection = null
                 testMessage = "Connection terminated. You can run another test."
+                connectionTerminal.add("Disconnected; ready for new test", TerminalLevel.SUCCESS)
             } catch (error: Exception) {
                 testMessage = "Disconnect error: ${error.message}"
+                connectionTerminal.add("Disconnect failed: ${error.message}", TerminalLevel.ERROR)
             }
         }
     }
@@ -288,6 +310,7 @@ private fun ScannerScreen(
     devices: List<BleScanResult>,
     isScanning: Boolean,
     message: String,
+    terminal: TerminalLog,
     onScanClick: () -> Unit,
     onStopClick: () -> Unit,
     onDeviceClick: (BleDevice) -> Unit
@@ -310,7 +333,7 @@ private fun ScannerScreen(
             Spacer(Modifier.height(16.dp))
             Text("Devices (${devices.size})", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(8.dp))
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(devices, key = { it.device.address }) { result ->
                     Card(
                         Modifier.fillMaxWidth().clickable { onDeviceClick(result.device) }
@@ -324,6 +347,8 @@ private fun ScannerScreen(
                     }
                 }
             }
+            Spacer(Modifier.height(12.dp))
+            TerminalConsole("SCAN TERMINAL", terminal, Modifier.height(220.dp))
         }
     }
 }
@@ -336,6 +361,7 @@ private fun ConnectionTestScreen(
     isRunning: Boolean,
     message: String,
     results: List<String>,
+    terminal: TerminalLog,
     hasActiveConnection: Boolean,
     onRunClick: () -> Unit,
     onDisconnectClick: () -> Unit,
@@ -373,9 +399,11 @@ private fun ConnectionTestScreen(
             Text(message)
             Spacer(Modifier.height(12.dp))
             Text("Results", style = MaterialTheme.typography.titleMedium)
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(results) { result -> Text(result) }
             }
+            Spacer(Modifier.height(12.dp))
+            TerminalConsole("CONNECTION TERMINAL", terminal, Modifier.height(260.dp))
         }
     }
 }
