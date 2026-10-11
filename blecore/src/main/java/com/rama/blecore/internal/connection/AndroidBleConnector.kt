@@ -22,6 +22,13 @@ import com.rama.blecore.timeout.BleTimeoutConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
+import com.rama.blecore.connection.BleConnectionState
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+
 
 internal class AndroidBleConnector(
     context: Context,
@@ -31,6 +38,13 @@ internal class AndroidBleConnector(
         DefaultBleRetryStrategy()
 ) : BleConnector {
 
+    private val connectionRegistry =
+        BleConnectionRegistry()
+
+    private val lifecycleScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default
+    )
+
     private val appContext =
         context.applicationContext
 
@@ -39,44 +53,94 @@ internal class AndroidBleConnector(
         config: BleConnectionConfig
     ): BleConnection {
 
-        var retryAttempt = 0
+        val address = device.address.uppercase()
 
-        while (true) {
+        // Atomic reservation. Throws a typed duplicate error.
+        val token = connectionRegistry.reserve(address)
 
-            try {
+        var ownershipTransferred = false
 
-                return connectOnce(
-                    device = device,
-                    config = config
+        try {
+
+            var retryAttempt = 0
+
+            while (true) {
+
+                try {
+
+                    val connection = connectOnce(
+                        device = device,
+                        config = config
+                    )
+
+                    connectionRegistry.markConnected(
+                        address = address,
+                        token = token
+                    )
+
+                    // Observe the session until it terminates.
+                    lifecycleScope.launch {
+
+                        try {
+                            connection.state.first { state ->
+
+                                state is BleConnectionState.Disconnected ||
+                                        state is BleConnectionState.Failed
+                            }
+                        } finally {
+
+                            connectionRegistry.release(
+                                address = address,
+                                token = token
+                            )
+                        }
+                    }
+
+                    ownershipTransferred = true
+
+                    return connection
+
+                } catch (cancellation: CancellationException) {
+
+                    throw cancellation
+
+                } catch (throwable: Throwable) {
+
+                    val shouldRetry =
+                        retryStrategy.shouldRetry(
+                            attempt = retryAttempt,
+                            policy = config.retryPolicy
+                        )
+
+                    if (!shouldRetry) {
+                        throw throwable
+                    }
+
+                    val retryDelay =
+                        retryStrategy.nextDelay(
+                            attempt = retryAttempt,
+                            policy = config.retryPolicy
+                        )
+
+                    retryAttempt++
+
+                    if (retryDelay.isPositive()) {
+                        delay(retryDelay)
+                    }
+                }
+            }
+
+        } finally {
+
+            // Failed or cancelled requests retain ownership here.
+            // Successful connections transfer ownership to
+            // the lifecycle observer above.
+            if (!ownershipTransferred) {
+
+                connectionRegistry.release(
+                    address = address,
+                    token = token
                 )
-
-            } catch (cancellation: CancellationException) {
-
-                throw cancellation
-
-            } catch (throwable: Throwable) {
-
-                val shouldRetry =
-                    retryStrategy.shouldRetry(
-                        attempt = retryAttempt,
-                        policy = config.retryPolicy
-                    )
-
-                if (!shouldRetry) {
-                    throw throwable
-                }
-
-                val retryDelay =
-                    retryStrategy.nextDelay(
-                        attempt = retryAttempt,
-                        policy = config.retryPolicy
-                    )
-
-                retryAttempt++
-
-                if (retryDelay.isPositive()) {
-                    delay(retryDelay)
-                }
             }
         }
     }

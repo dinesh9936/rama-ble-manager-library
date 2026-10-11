@@ -48,6 +48,18 @@ sealed class BleError(
         cause = cause
     )
 
+    data class AlreadyConnecting(
+        val deviceAddress: String,
+        override val message: String =
+            "A connection to device $deviceAddress is already in progress"
+    ) : BleError(message)
+
+    data class AlreadyConnected(
+        val deviceAddress: String,
+        override val message: String =
+            "Device $deviceAddress is already connected"
+    ) : BleError(message)
+
     data class Disconnected(
         val deviceAddress: String? = null,
         val status: Int? = null,
