@@ -5,39 +5,27 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
+import com.rama.blecore.client.BleClient
 import com.rama.blecore.client.BleClientConfig
 import com.rama.blecore.client.BleClientFactory
 import com.rama.blecore.connection.BleConnection
+import com.rama.blecore.connection.BleConnectionPolicy
+import com.rama.blecore.connection.BleConnectionState
 import com.rama.blecore.error.BleError
 import com.rama.blecore.error.BleException
 import com.rama.blecore.model.BleDevice
@@ -45,59 +33,66 @@ import com.rama.blecore.scan.BleScanConfig
 import com.rama.blecore.scan.BleScanResult
 import com.rama.blecore.timeout.BleTimeoutConfig
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.joinAll
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.onCompletion
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.onCompletion
+import kotlinx.coroutines.launch
+import java.util.Locale
 import kotlin.time.Duration.Companion.seconds
 
 class MainActivity : ComponentActivity() {
 
-    private val bleClient by lazy {
-        BleClientFactory.create(
-            context = applicationContext,
-            config = BleClientConfig(
-                timeoutConfig = BleTimeoutConfig(scanTimeout = 2.seconds)
-            )
-        )
-    }
+    private var selectedPolicy by mutableStateOf(BleConnectionPolicy.SINGLE_DEVICE)
+    private var currentScreen by mutableStateOf(SamplePage.HOME)
+    private var selectedTestDevice by mutableStateOf<BleDevice?>(null)
+    private var bleClient: BleClient? = null
+    private val shutdownScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val scannedDevices = mutableStateListOf<BleScanResult>()
+    private val connections = mutableStateMapOf<String, BleConnection>()
+    private val connectionStates = mutableStateMapOf<String, String>()
+    private val busyAddresses = mutableStateListOf<String>()
+    private val stateJobs = mutableMapOf<String, Job>()
+
     private var isScanning by mutableStateOf(false)
-    private var scanMessage by mutableStateOf("Press Scan to discover BLE devices.")
-    private var selectedDevice by mutableStateOf<BleDevice?>(null)
-    private var attemptCount by mutableStateOf("3")
     private var isRunning by mutableStateOf(false)
-    private var testMessage by mutableStateOf("Enter a count, then run the test.")
-    private val testResults = mutableStateListOf<String>()
+    private var isDisconnecting by mutableStateOf(false)
+    private var scanMessage by mutableStateOf("Press Scan to discover BLE devices")
+    private var connectionMessage by mutableStateOf("Select a device to connect")
+    private var attemptCount by mutableStateOf("3")
     private val scanTerminal = TerminalLog()
     private val connectionTerminal = TerminalLog()
-
+    private val results = mutableStateListOf<String>()
     private var scanJob: Job? = null
-    private var connectJob: Job? = null
-    private var activeConnection: BleConnection? = null
-    private var pendingAttemptCount: Int? = null
+    private var testJob: Job? = null
+    private var pendingAction: (() -> Unit)? = null
 
-    private val scanPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        if (permissions.values.all { it }) startBleScan()
-        else scanMessage = "BLE scan permission denied."
-    }
+    private fun key(address: String) = address.uppercase(Locale.ROOT)
 
-    private val connectPermissionLauncher = registerForActivityResult(
+    private fun client(): BleClient = bleClient ?: BleClientFactory.create(
+        context = applicationContext,
+        config = BleClientConfig(
+            connectionPolicy = selectedPolicy,
+            timeoutConfig = BleTimeoutConfig(scanTimeout = 2.seconds)
+        )
+    ).also { bleClient = it }
+
+    private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        val count = pendingAttemptCount
-        pendingAttemptCount = null
-        if (permissions.values.all { it } && count != null) {
-            startConnectionTest(count)
-        } else {
-            testMessage = "BLE connection permission denied."
+    ) { granted ->
+        val action = pendingAction
+        pendingAction = null
+        if (granted.values.all { it }) action?.invoke()
+        else {
+            connectionMessage = "Bluetooth permission denied"
+            connectionTerminal.add(connectionMessage, TerminalLevel.ERROR)
         }
     }
 
@@ -105,305 +100,617 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme {
-                val selected = selectedDevice
-                BackHandler(enabled = selected != null && !isRunning && activeConnection == null) {
-                    selectedDevice = null
-                }
-                if (selected == null) {
-                    ScannerScreen(
+                when (currentScreen) {
+                    SamplePage.HOME -> HomePage(
+                        policy = selectedPolicy,
+                        policyEnabled = bleClient == null && !isRunning && !isScanning && !isDisconnecting,
+                        onPolicyChange = { policy ->
+                            if (bleClient == null && !isRunning && !isScanning && !isDisconnecting) {
+                                selectedPolicy = policy
+                                connectionTerminal.add("Policy changed to $policy")
+                            }
+                        },
+                        activeCount = connections.size,
+                        onScan = { currentScreen = SamplePage.SCAN },
+                        onConnections = { currentScreen = SamplePage.CONNECTIONS },
+                        onLogs = { currentScreen = SamplePage.LOGS }
+                    )
+                    SamplePage.SCAN -> ScanPage(
                         devices = scannedDevices,
                         isScanning = isScanning,
                         message = scanMessage,
                         terminal = scanTerminal,
-                        onScanClick = ::checkAndStartScan,
-                        onStopClick = ::stopBleScan,
-                        onDeviceClick = { device ->
-                            scanJob?.cancel()
-                            stopBleScan()
-                            selectedDevice = device
-                            testResults.clear()
-                            testMessage = "Enter a count, then run the test."
+                        onScan = ::checkAndScan,
+                        onStop = ::stopScan,
+                        onBack = { currentScreen = SamplePage.HOME },
+                        onSelect = { device ->
+                            selectedTestDevice = device
+                            currentScreen = SamplePage.DEVICE
                         }
                     )
-                } else {
-                    ConnectionTestScreen(
-                        device = selected,
-                        attemptCount = attemptCount,
-                        onAttemptCountChange = { attemptCount = it.filter(Char::isDigit).take(2) },
+                    SamplePage.DEVICE -> {
+                        val device = selectedTestDevice
+                        if (device != null) DevicePage(
+                            device = device,
+                            policy = selectedPolicy,
+                            isRunning = isRunning,
+                            isDisconnecting = isDisconnecting,
+                            isScanning = isScanning,
+                            isBusy = key(device.address) in busyAddresses,
+                            isConnected = connections.containsKey(key(device.address)),
+                            state = connectionStates[key(device.address)] ?: "Not connected",
+                            message = connectionMessage,
+                            attemptCount = attemptCount,
+                            onAttemptCountChange = { attemptCount = it.filter(Char::isDigit).take(2) },
+                            results = results,
+                            terminal = connectionTerminal,
+                            onConnect = { checkAndConnect(device) },
+                            onDisconnect = { disconnectDevice(key(device.address)) },
+                            onTest = { checkAndTest(device) },
+                            onBack = { currentScreen = SamplePage.SCAN },
+                            onConnections = { currentScreen = SamplePage.CONNECTIONS }
+                        )
+                    }
+                    SamplePage.CONNECTIONS -> ConnectionsPage(
+                        policy = selectedPolicy,
+                        connections = connections,
+                        states = connectionStates,
                         isRunning = isRunning,
-                        message = testMessage,
-                        results = testResults,
-                        terminal = connectionTerminal,
-                        hasActiveConnection = activeConnection != null,
-                        onRunClick = ::checkAndRunConnections,
-                        onDisconnectClick = ::disconnectActiveConnection,
-                        onBackClick = { selectedDevice = null }
+                        isDisconnecting = isDisconnecting,
+                        onDisconnect = ::disconnectDevice,
+                        onDisconnectAll = ::disconnectAll,
+                        onBack = { currentScreen = SamplePage.HOME },
+                        onScan = { currentScreen = SamplePage.SCAN }
+                    )
+                    SamplePage.LOGS -> LogsPage(
+                        scanTerminal = scanTerminal,
+                        connectionTerminal = connectionTerminal,
+                        onBack = { currentScreen = SamplePage.HOME }
                     )
                 }
             }
         }
     }
 
-    private fun checkAndStartScan() {
-        scanTerminal.add("Checking scan prerequisites")
-        val environment = bleClient.environment.checkScan()
+    private fun checkPermissions(forScan: Boolean, action: () -> Unit) {
+        val environment = if (forScan) client().environment.checkScan()
+        else client().environment.checkConnect()
         when {
-            !environment.bleSupported -> scanMessage = "BLE is not supported."
-            !environment.bluetoothEnabled -> scanMessage = "Please enable Bluetooth."
+            !environment.bleSupported -> connectionMessage = "BLE not supported"
+            !environment.bluetoothEnabled -> connectionMessage = "Enable Bluetooth first"
             environment.missingPermissions.isNotEmpty() -> {
-                scanPermissionLauncher.launch(environment.missingPermissions.toTypedArray())
+                pendingAction = action
+                permissionLauncher.launch(environment.missingPermissions.toTypedArray())
             }
-            else -> startBleScan()
+            else -> action()
         }
     }
 
-    private fun startBleScan() {
-        scanJob?.cancel()
-        scanTerminal.clear()
-        scanTerminal.add("Starting BLE scan")
+    private fun checkAndScan() = checkPermissions(forScan = true, action = ::startScan)
+
+    private fun startScan() {
+        if (isScanning || isRunning || isDisconnecting) return
         scannedDevices.clear()
+        scanTerminal.clear()
+        scanMessage = "Scanning..."
         isScanning = true
-        scanMessage = "Scanning for BLE devices..."
         scanJob = lifecycleScope.launch {
-            bleClient.scan(BleScanConfig(allowDuplicates = false))
-                .catch { error ->
-                    scanMessage = (error as? BleException)?.error?.message
-                        ?: error.message ?: "BLE scan failed."
+            client().scan(BleScanConfig(allowDuplicates = false))
+                .catch { e ->
+                    scanMessage = e.message ?: "Scan failed"
                     scanTerminal.add(scanMessage, TerminalLevel.ERROR)
-                    Log.e(TAG, "Scan error", error)
+                    Log.e(TAG, "Scan failed", e)
                 }
                 .onCompletion {
                     isScanning = false
-                    scanTerminal.add("Scan completed: ${scannedDevices.size} devices", TerminalLevel.SUCCESS)
-                    if (scanMessage == "Scanning for BLE devices...") {
-                        scanMessage = "${scannedDevices.size} devices found."
+                    if (scanMessage == "Scanning...") {
+                        scanMessage = "Found ${scannedDevices.size} devices"
                     }
+                    scanTerminal.add("Scan finished: ${scannedDevices.size} devices")
                 }
                 .collect { result ->
-                    if (scannedDevices.none { it.device.address == result.device.address }) {
+                    if (scannedDevices.none { key(it.device.address) == key(result.device.address) }) {
                         scannedDevices.add(result)
-                        scanTerminal.add("Found ${result.device.name ?: "Unknown"} (${result.device.address}), RSSI=${result.rssi}")
+                        scanTerminal.add("Found ${result.device.name ?: "Unknown"} (${result.device.address})")
                     }
                 }
         }
     }
 
-    private fun stopBleScan() {
-        scanTerminal.add("Scan stop requested", TerminalLevel.WARNING)
+    private fun stopScan() {
         scanJob?.cancel()
         scanJob = null
-        lifecycleScope.launch { bleClient.stopScan() }
-        isScanning = false
+        lifecycleScope.launch { client().stopScan() }
     }
 
-    private fun checkAndRunConnections() {
-        if (isRunning) return
-        val count = attemptCount.toIntOrNull()
-        if (count == null || count !in 1..20) {
-            testMessage = "Enter a number from 1 to 20."
+    private fun checkAndConnect(device: BleDevice) =
+        checkPermissions(forScan = false) { connectDevice(device) }
+
+    private fun connectDevice(device: BleDevice) {
+        if (isRunning || isDisconnecting) return
+        val address = key(device.address)
+        if (address in busyAddresses) {
+            connectionTerminal.add("Already connecting $address", TerminalLevel.WARNING)
             return
         }
-        val environment = bleClient.environment.checkConnect()
-        when {
-            !environment.bleSupported -> testMessage = "BLE is not supported."
-            !environment.bluetoothEnabled -> testMessage = "Please enable Bluetooth."
-            environment.missingPermissions.isNotEmpty() -> {
-                pendingAttemptCount = count
-                connectPermissionLauncher.launch(environment.missingPermissions.toTypedArray())
+        busyAddresses.add(address)
+        lifecycleScope.launch {
+            try {
+                connectOnce(device)
+            } finally {
+                busyAddresses.remove(address)
             }
-            else -> startConnectionTest(count)
         }
     }
 
-    private fun startConnectionTest(count: Int) {
-        val device = selectedDevice ?: return
-        if (isRunning) return
-        testResults.clear()
-        connectionTerminal.clear()
-        connectionTerminal.add("Starting $count concurrent requests for ${device.address}")
-        testMessage = "Starting $count simultaneous connection requests..."
-        isRunning = true
-        connectJob = lifecycleScope.launch {
+    private suspend fun connectOnce(device: BleDevice): Boolean {
+        val address = key(device.address)
+        connectionTerminal.add("CONNECT requested: $address")
+        return try {
+            val connection = client().connect(device)
+            // SINGLE_DEVICE replacement can terminate a previously tracked connection.
+            // The state observer below removes it when it reaches a terminal state.
+            if (connections[address] != null) {
+                connectionTerminal.add("Unexpected duplicate success: $address", TerminalLevel.ERROR)
+                connection.disconnect()
+                false
+            } else {
+                connections[address] = connection
+                connectionStates[address] = connection.state.value.toString()
+                observeConnection(address, connection)
+                connectionMessage = "Connected: $address"
+                connectionTerminal.add("CONNECTED $address", TerminalLevel.SUCCESS)
+                true
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (e: BleException) {
+            val label = when (e.error) {
+                is BleError.AlreadyConnecting -> "ALREADY CONNECTING"
+                is BleError.AlreadyConnected -> "ALREADY CONNECTED"
+                else -> "FAILED: ${e.error.message}"
+            }
+            connectionTerminal.add("$address: $label", TerminalLevel.WARNING)
+            connectionMessage = "$address: $label"
+            false
+        } catch (e: Exception) {
+            connectionTerminal.add("$address: ${e.message}", TerminalLevel.ERROR)
+            Log.e(TAG, "Connect failed", e)
+            false
+        }
+    }
+
+    private fun observeConnection(address: String, connection: BleConnection) {
+        stateJobs.remove(address)?.cancel()
+        stateJobs[address] = lifecycleScope.launch {
+            connection.state.collect { state ->
+                connectionStates[address] = state.toString()
+                connectionTerminal.add("STATE $address: $state")
+                if (state is BleConnectionState.Disconnected || state is BleConnectionState.Failed) {
+                    if (connections[address] === connection) {
+                        connections.remove(address)
+                        connectionStates.remove(address)
+                    }
+                    connectionTerminal.add("TERMINAL $address", TerminalLevel.WARNING)
+                    // Terminal state is not necessarily proof that GATT cleanup has completed.
+                    stateJobs.remove(address)
+                    cancel()
+                }
+            }
+        }
+    }
+
+    private fun disconnectDevice(address: String) {
+        val connection = connections[address] ?: return
+        if (isRunning || isDisconnecting) return
+        lifecycleScope.launch {
+            isDisconnecting = true
             try {
-                val jobs = (1..count).map { attempt ->
-                    launch {
-                        connectionTerminal.add("Attempt $attempt: connecting")
-                        try {
-                            val connection = bleClient.connect(device)
-                            // Keep the first successful session alive to test AlreadyConnected.
-                            // Extra successes are unexpected and must be closed.
-                            if (activeConnection == null) {
-                                activeConnection = connection
-                                testResults.add("Attempt $attempt: CONNECTED")
-                                connectionTerminal.add("Attempt $attempt: CONNECTED", TerminalLevel.SUCCESS)
-                            } else {
-                                testResults.add("Attempt $attempt: DUPLICATE CONNECTION SUCCEEDED")
-                                connectionTerminal.add("Attempt $attempt: duplicate succeeded unexpectedly", TerminalLevel.ERROR)
-                                connection.disconnect()
-                            }
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (error: BleException) {
-                            val label = when (error.error) {
-                                is BleError.AlreadyConnecting -> "ALREADY CONNECTING"
-                                is BleError.AlreadyConnected -> "ALREADY CONNECTED"
-                                else -> "FAILED: ${error.error.message}"
-                            }
-                            testResults.add("Attempt $attempt: $label")
-                            connectionTerminal.add("Attempt $attempt: $label", TerminalLevel.WARNING)
-                        } catch (error: Exception) {
-                            testResults.add("Attempt $attempt: ERROR: ${error.message}")
-                            connectionTerminal.add("Attempt $attempt: ${error.message}", TerminalLevel.ERROR)
-                            Log.e(TAG, "Connection attempt $attempt failed", error)
-                        }
+                connectionTerminal.add("DISCONNECT requested: $address")
+                connection.disconnect()
+                // Registry cleanup may still be running after this returns.
+                connectionMessage = "Disconnect requested for $address"
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                connectionTerminal.add("Disconnect failed: ${e.message}", TerminalLevel.ERROR)
+            } finally {
+                isDisconnecting = false
+            }
+        }
+    }
+
+    private fun disconnectAll() {
+        if (isRunning || isDisconnecting) return
+        lifecycleScope.launch {
+            isDisconnecting = true
+            try {
+                connections.values.toList().forEach { connection ->
+                    try {
+                        connectionTerminal.add("DISCONNECT ${connection.device.address}")
+                        connection.disconnect()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        connectionTerminal.add("Disconnect error: ${e.message}", TerminalLevel.ERROR)
                     }
                 }
-                jobs.joinAll()
-                testMessage = "Finished $count requests. Review results below."
-                connectionTerminal.add("All $count requests finished")
+            } finally {
+                isDisconnecting = false
+            }
+        }
+    }
+
+    private fun checkAndTest(device: BleDevice) =
+        checkPermissions(forScan = false) { startConcurrentTest(device) }
+
+    private fun startConcurrentTest(device: BleDevice) {
+        val count = attemptCount.toIntOrNull()
+        if (count == null || count !in 1..20) {
+            connectionMessage = "Enter an attempt count from 1 to 20"
+            return
+        }
+        if (isRunning || isDisconnecting || isScanning) return
+        results.clear()
+        isRunning = true
+        testJob = lifecycleScope.launch {
+            try {
+                val outcomes = (1..count).map { index ->
+                    async {
+                        val ok = connectOnce(device)
+                        "Attempt $index: ${if (ok) "CONNECTED" else "REJECTED / FAILED"}"
+                    }
+                }.awaitAll()
+                results.addAll(outcomes)
+                connectionMessage = "Completed $count connection requests"
             } finally {
                 isRunning = false
             }
         }
     }
 
-    private fun disconnectActiveConnection() {
-        val connection = activeConnection ?: return
-        lifecycleScope.launch {
-            try {
-                connectionTerminal.add("Disconnect requested", TerminalLevel.WARNING)
-                connection.disconnect()
-                testMessage = "Disconnect requested. Wait for GATT cleanup before retesting."
-                // ConnectionState is updated asynchronously by the BLE library.
-                connection.state.first { state ->
-                    state is com.rama.blecore.connection.BleConnectionState.Disconnected ||
-                            state is com.rama.blecore.connection.BleConnectionState.Failed
-                }
-                if (activeConnection === connection) activeConnection = null
-                testMessage = "Connection terminated. You can run another test."
-                connectionTerminal.add("Disconnected; ready for new test", TerminalLevel.SUCCESS)
-            } catch (error: Exception) {
-                testMessage = "Disconnect error: ${error.message}"
-                connectionTerminal.add("Disconnect failed: ${error.message}", TerminalLevel.ERROR)
-            }
-        }
-    }
-
     override fun onDestroy() {
         scanJob?.cancel()
-        connectJob?.cancel()
-        activeConnection?.let { connection ->
-            CoroutineScope(Dispatchers.IO).launch {
-                runCatching { connection.disconnect() }
+        testJob?.cancel()
+        stateJobs.values.forEach { it.cancel() }
+        val toDisconnect = connections.values.toList()
+        shutdownScope.launch {
+            toDisconnect.forEach { connection ->
+                try { connection.disconnect() } catch (e: Exception) {
+                    Log.e(TAG, "Shutdown disconnect failed", e)
+                }
             }
         }
         super.onDestroy()
     }
 
-    companion object {
-        private const val TAG = "RamaBleSample"
+    companion object { private const val TAG = "RamaBleSample" }
+}
+
+
+private enum class SamplePage { HOME, SCAN, DEVICE, CONNECTIONS, LOGS }
+
+@Composable
+private fun AppPage(
+    title: String,
+    subtitle: String? = null,
+    onBack: (() -> Unit)? = null,
+    action: @Composable RowScope.() -> Unit = {},
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Scaffold(
+        topBar = {
+            Surface(tonalElevation = 3.dp) {
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (onBack != null) {
+                        TextButton(onClick = onBack) { Text("‹ Back") }
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 1,
+                            overflow = TextOverflow.Ellipsis)
+                        if (subtitle != null) Text(subtitle, style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                    }
+                    action()
+                }
+            }
+        }
+    ) { padding ->
+        Column(
+            Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            content = content
+        )
     }
 }
 
 @Composable
-private fun ScannerScreen(
+private fun InfoCard(
+    title: String,
+    detail: String,
+    modifier: Modifier = Modifier,
+    trailing: @Composable (() -> Unit)? = null
+) {
+    Card(modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
+        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(detail, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            trailing?.invoke()
+        }
+    }
+}
+
+@Composable
+private fun HomePage(
+    policy: BleConnectionPolicy,
+    policyEnabled: Boolean,
+    onPolicyChange: (BleConnectionPolicy) -> Unit,
+    activeCount: Int,
+    onScan: () -> Unit,
+    onConnections: () -> Unit,
+    onLogs: () -> Unit
+) {
+    AppPage("Rama BLE Manager", "BLE connection testing") {
+        Text("CONNECTION MODE", style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary)
+        BleConnectionPolicy.entries.forEach { option ->
+            Card(
+                onClick = { if (policyEnabled) onPolicyChange(option) },
+                enabled = policyEnabled,
+                colors = CardDefaults.cardColors(
+                    containerColor = if (policy == option) MaterialTheme.colorScheme.primaryContainer
+                    else MaterialTheme.colorScheme.surfaceVariant
+                )
+            ) {
+                Row(Modifier.fillMaxWidth().padding(10.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(selected = policy == option,
+                        onClick = { onPolicyChange(option) }, enabled = policyEnabled)
+                    Column(Modifier.weight(1f)) {
+                        Text(option.name.replace('_', ' '), fontWeight = FontWeight.SemiBold)
+                        Text(
+                            if (option == BleConnectionPolicy.SINGLE_DEVICE)
+                                "Connecting a new device replaces the previous connection."
+                            else "Connect multiple different devices simultaneously.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+        }
+        if (!policyEnabled) Text(
+            "Policy locked for this client. Restart the app to change it.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(8.dp))
+        Button(onClick = onScan, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+            Text("Scan BLE devices")
+        }
+        OutlinedButton(onClick = onConnections, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+            Text("Active connections ($activeCount)")
+        }
+        OutlinedButton(onClick = onLogs, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+            Text("View terminal logs")
+        }
+        Spacer(Modifier.weight(1f))
+        Text("Test duplicate requests, switching, and independent connections.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun ScanPage(
     devices: List<BleScanResult>,
     isScanning: Boolean,
     message: String,
     terminal: TerminalLog,
-    onScanClick: () -> Unit,
-    onStopClick: () -> Unit,
-    onDeviceClick: (BleDevice) -> Unit
+    onScan: () -> Unit,
+    onStop: () -> Unit,
+    onBack: () -> Unit,
+    onSelect: (BleDevice) -> Unit
 ) {
-    Scaffold { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
-            Text("Rama BLE Manager", style = MaterialTheme.typography.headlineMedium)
-            Spacer(Modifier.height(16.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(onClick = onScanClick, enabled = !isScanning) {
-                    Text(if (isScanning) "Scanning..." else "Scan BLE Devices")
-                }
-                if (isScanning) {
-                    Button(onClick = onStopClick) { Text("Stop") }
-                    CircularProgressIndicator()
+    AppPage(
+        title = "Discover devices",
+        subtitle = "${devices.size} device(s) found",
+        onBack = onBack,
+        action = {
+            if (isScanning) TextButton(onClick = onStop) { Text("Stop") }
+            else TextButton(onClick = onScan) { Text("Scan") }
+        }
+    ) {
+        if (isScanning) LinearProgressIndicator(Modifier.fillMaxWidth())
+        Text(message, style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (devices.isEmpty()) {
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("No devices listed yet", style = MaterialTheme.typography.titleMedium)
+                    Button(onClick = onScan, enabled = !isScanning) { Text("Start scan") }
                 }
             }
-            Spacer(Modifier.height(12.dp))
-            Text(message)
-            Spacer(Modifier.height(16.dp))
-            Text("Devices (${devices.size})", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(8.dp))
-            LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        } else {
+            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(devices, key = { it.device.address }) { result ->
-                    Card(
-                        Modifier.fillMaxWidth().clickable { onDeviceClick(result.device) }
-                    ) {
-                        Column(Modifier.padding(16.dp)) {
-                            Text(result.device.name ?: "Unknown device", style = MaterialTheme.typography.titleMedium)
-                            Text("Address: ${result.device.address}")
-                            Text("RSSI: ${result.rssi} dBm")
-                            Text("Tap to test connections")
+                    Card(onClick = { onSelect(result.device) }, modifier = Modifier.fillMaxWidth()) {
+                        Row(Modifier.fillMaxWidth().padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(result.device.name ?: "Unknown device",
+                                    style = MaterialTheme.typography.titleMedium)
+                                Text(result.device.address,
+                                    style = MaterialTheme.typography.bodySmall)
+                                Text("RSSI ${result.rssi} dBm",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Text("›", style = MaterialTheme.typography.headlineMedium)
                         }
                     }
                 }
             }
-            Spacer(Modifier.height(12.dp))
-            TerminalConsole("SCAN TERMINAL", terminal, Modifier.height(220.dp))
+        }
+        // Logs live on their own page; keep scanning focused on device discovery.
+    }
+}
+
+@Composable
+private fun DevicePage(
+    device: BleDevice,
+    policy: BleConnectionPolicy,
+    isRunning: Boolean,
+    isDisconnecting: Boolean,
+    isScanning: Boolean,
+    isBusy: Boolean,
+    isConnected: Boolean,
+    state: String,
+    message: String,
+    attemptCount: String,
+    onAttemptCountChange: (String) -> Unit,
+    results: List<String>,
+    terminal: TerminalLog,
+    onConnect: () -> Unit,
+    onDisconnect: () -> Unit,
+    onTest: () -> Unit,
+    onBack: () -> Unit,
+    onConnections: () -> Unit
+) {
+    AppPage(title = "Device test", subtitle = device.name ?: device.address, onBack = onBack) {
+        InfoCard(device.name ?: "Unknown device", device.address)
+        Text("Mode: ${policy.name.replace('_', ' ')}",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary)
+        Text("Connection state", style = MaterialTheme.typography.labelMedium)
+        Surface(color = MaterialTheme.colorScheme.surfaceVariant,
+            shape = RoundedCornerShape(10.dp)) {
+            Text(state, Modifier.fillMaxWidth().padding(12.dp),
+                style = MaterialTheme.typography.bodySmall, maxLines = 3,
+                overflow = TextOverflow.Ellipsis)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(
+                onClick = onConnect,
+                enabled = !isRunning && !isDisconnecting && !isScanning && !isBusy,
+                modifier = Modifier.weight(1f)
+            ) { Text(if (isBusy) "Connecting..." else "Connect") }
+            OutlinedButton(
+                onClick = onDisconnect,
+                enabled = isConnected && !isRunning && !isDisconnecting,
+                modifier = Modifier.weight(1f)
+            ) { Text("Disconnect") }
+        }
+        HorizontalDivider()
+        Text("Concurrent connection test", style = MaterialTheme.typography.titleMedium)
+        Text("Send multiple requests to this same device to test duplicate protection.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        OutlinedTextField(
+            value = attemptCount,
+            onValueChange = onAttemptCountChange,
+            label = { Text("Requests (1–20)") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            singleLine = true,
+            enabled = !isRunning,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Button(
+            onClick = onTest,
+            enabled = !isRunning && !isDisconnecting && !isScanning,
+            modifier = Modifier.fillMaxWidth()
+        ) { Text(if (isRunning) "Running test..." else "Run test") }
+        if (isRunning) LinearProgressIndicator(Modifier.fillMaxWidth())
+        Text(message, style = MaterialTheme.typography.bodySmall)
+        if (results.isNotEmpty()) {
+            Text("Results (${results.size})", style = MaterialTheme.typography.titleSmall)
+            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                items(results) { result ->
+                    Text(result, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        } else {
+            Spacer(Modifier.weight(1f))
+        }
+        OutlinedButton(onClick = onConnections, modifier = Modifier.fillMaxWidth()) {
+            Text("View active connections")
         }
     }
 }
 
 @Composable
-private fun ConnectionTestScreen(
-    device: BleDevice,
-    attemptCount: String,
-    onAttemptCountChange: (String) -> Unit,
+private fun ConnectionsPage(
+    policy: BleConnectionPolicy,
+    connections: Map<String, BleConnection>,
+    states: Map<String, String>,
     isRunning: Boolean,
-    message: String,
-    results: List<String>,
-    terminal: TerminalLog,
-    hasActiveConnection: Boolean,
-    onRunClick: () -> Unit,
-    onDisconnectClick: () -> Unit,
-    onBackClick: () -> Unit
+    isDisconnecting: Boolean,
+    onDisconnect: (String) -> Unit,
+    onDisconnectAll: () -> Unit,
+    onBack: () -> Unit,
+    onScan: () -> Unit
 ) {
-    Scaffold { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
-            Button(onClick = onBackClick, enabled = !isRunning && !hasActiveConnection) { Text("Back to devices") }
-            Spacer(Modifier.height(12.dp))
-            Text("Connection Test", style = MaterialTheme.typography.headlineMedium)
-            Text(device.name ?: "Unknown device", style = MaterialTheme.typography.titleMedium)
-            Text(device.address)
-            Spacer(Modifier.height(20.dp))
-            OutlinedTextField(
-                value = attemptCount,
-                onValueChange = onAttemptCountChange,
-                label = { Text("Number of connection requests (1–20)") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                singleLine = true,
-                enabled = !isRunning,
+    AppPage(title = "Active connections", subtitle = "${connections.size} tracked", onBack = onBack) {
+        Text("Policy: ${policy.name.replace('_', ' ')}",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary)
+        if (connections.isEmpty()) {
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text("No active connections", style = MaterialTheme.typography.titleMedium)
+            }
+        } else {
+            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(connections.entries.toList(), key = { it.key }) { (address, connection) ->
+                    InfoCard(
+                        title = connection.device.name ?: "Unknown device",
+                        detail = "$address\n${states[address] ?: "Unknown state"}",
+                        trailing = {
+                            TextButton(
+                                onClick = { onDisconnect(address) },
+                                enabled = !isRunning && !isDisconnecting
+                            ) { Text("Disconnect") }
+                        }
+                    )
+                }
+            }
+            OutlinedButton(
+                onClick = onDisconnectAll,
+                enabled = !isRunning && !isDisconnecting,
                 modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(onClick = onRunClick, enabled = !isRunning) {
-                    Text(if (isRunning) "Running..." else "Run Connect Test")
-                }
-                if (hasActiveConnection) {
-                    Button(onClick = onDisconnectClick, enabled = !isRunning) {
-                        Text("Disconnect")
-                    }
-                }
-            }
-            Spacer(Modifier.height(16.dp))
-            Text(message)
-            Spacer(Modifier.height(12.dp))
-            Text("Results", style = MaterialTheme.typography.titleMedium)
-            LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(results) { result -> Text(result) }
-            }
-            Spacer(Modifier.height(12.dp))
-            TerminalConsole("CONNECTION TERMINAL", terminal, Modifier.height(260.dp))
+            ) { Text("Disconnect all") }
         }
+        Button(onClick = onScan, modifier = Modifier.fillMaxWidth()) {
+            Text("Scan / connect another device")
+        }
+    }
+}
+
+@Composable
+private fun LogsPage(
+    scanTerminal: TerminalLog,
+    connectionTerminal: TerminalLog,
+    onBack: () -> Unit
+) {
+    var selectedTab by remember { mutableIntStateOf(0) }
+    AppPage(title = "Terminal logs", subtitle = "Live BLE events", onBack = onBack) {
+        TabRow(selectedTabIndex = selectedTab) {
+            Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 },
+                text = { Text("Connections") })
+            Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 },
+                text = { Text("Scanner") })
+        }
+        val log = if (selectedTab == 0) connectionTerminal else scanTerminal
+        TerminalConsole(
+            title = if (selectedTab == 0) "CONNECTION TERMINAL" else "SCAN TERMINAL",
+            log = log,
+            modifier = Modifier.weight(1f)
+        )
     }
 }

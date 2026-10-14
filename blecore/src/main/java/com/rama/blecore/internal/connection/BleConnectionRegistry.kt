@@ -2,6 +2,7 @@ package com.rama.blecore.internal.connection
 
 import com.rama.blecore.error.BleError
 import com.rama.blecore.error.BleException
+import java.util.Locale
 
 internal class BleConnectionRegistry {
 
@@ -23,12 +24,11 @@ internal class BleConnectionRegistry {
     fun reserve(address: String): Any =
         synchronized(lock) {
 
-            val existing = connections[address]
+            val key = normalizeAddress(address)
+            val existing = connections[key]
 
             if (existing != null) {
-
                 val error = when (existing.status) {
-
                     Status.CONNECTING ->
                         BleError.AlreadyConnecting(address)
 
@@ -41,7 +41,7 @@ internal class BleConnectionRegistry {
 
             val token = Any()
 
-            connections[address] = Entry(
+            connections[key] = Entry(
                 token = token,
                 status = Status.CONNECTING
             )
@@ -55,10 +55,11 @@ internal class BleConnectionRegistry {
     ) {
         synchronized(lock) {
 
-            val entry = connections[address]
+            val key = normalizeAddress(address)
+            val entry = connections[key]
 
             if (entry?.token === token) {
-                connections[address] = entry.copy(
+                connections[key] = entry.copy(
                     status = Status.CONNECTED
                 )
             }
@@ -71,11 +72,16 @@ internal class BleConnectionRegistry {
     ) {
         synchronized(lock) {
 
-            val entry = connections[address]
+            val key = normalizeAddress(address)
+            val entry = connections[key]
 
             if (entry?.token === token) {
-                connections.remove(address)
+                connections.remove(key)
             }
         }
+    }
+
+    private fun normalizeAddress(address: String): String {
+        return address.uppercase(Locale.ROOT)
     }
 }

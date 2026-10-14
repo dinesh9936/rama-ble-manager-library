@@ -5,6 +5,7 @@ import com.rama.blecore.environment.BleEnvironmentPolicy
 import com.rama.blecore.internal.adapter.AndroidBluetoothAdapterProvider
 import com.rama.blecore.internal.client.AndroidBleClient
 import com.rama.blecore.internal.connection.AndroidBleConnector
+import com.rama.blecore.internal.connection.BleConnectionCoordinator
 import com.rama.blecore.internal.environment.AndroidBleEnvironmentChecker
 import com.rama.blecore.internal.environment.AndroidBleEnvironmentPolicy
 import com.rama.blecore.internal.permission.AndroidBlePermissionChecker
@@ -59,12 +60,20 @@ object BleClientFactory {
                 timeoutConfig = config.timeoutConfig
             )
 
-        val connector =
-            AndroidBleConnector(
-                context = appContext,
-                adapterProvider = adapterProvider,
-                timeoutConfig = config.timeoutConfig
-            )
+        // Low-level Android BLE connector.
+        // Responsible for BluetoothGatt connection lifecycle.
+        val androidConnector = AndroidBleConnector(
+            context = appContext,
+            adapterProvider = adapterProvider,
+            timeoutConfig = config.timeoutConfig
+        )
+
+        // Policy-aware connector.
+        // Controls whether multiple peripherals can be connected.
+        val connector = BleConnectionCoordinator(
+            delegate = androidConnector,
+            connectionPolicy = config.connectionPolicy
+        )
 
         return AndroidBleClient(
             environment = environmentChecker,
