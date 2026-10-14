@@ -16,6 +16,44 @@ class BleConnectionRegistryTest {
     private val addressA = "AA:BB:CC:DD:EE:01"
     private val addressB = "AA:BB:CC:DD:EE:02"
 
+
+    @Test
+    fun `old token cannot release newer connected device`() {
+
+        val registry = BleConnectionRegistry()
+
+        // First connection
+        val oldToken = registry.reserve(addressA)
+        registry.markConnected(addressA, oldToken)
+
+        // First connection disconnects
+        registry.release(addressA, oldToken)
+
+        // Second connection
+        val newToken = registry.reserve(addressA)
+        registry.markConnected(addressA, newToken)
+
+        // Delayed cleanup from old connection
+        registry.release(addressA, oldToken)
+
+        // New connection must still be registered
+        val exception = assertThrows(BleException::class.java) {
+            registry.reserve(addressA)
+        }
+
+        assertTrue(
+            exception.error is BleError.AlreadyConnected
+        )
+
+        // Release current connection
+        registry.release(addressA, newToken)
+
+        // Device should become available again
+        val thirdToken = registry.reserve(addressA)
+
+        assertNotSame(newToken, thirdToken)
+    }
+
     @Test
     fun `concurrent reservations allow only one connection`() = runBlocking {
 

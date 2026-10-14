@@ -32,7 +32,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Duration.Companion.milliseconds
 
 internal class AndroidBleConnector(
@@ -253,15 +252,17 @@ internal class AndroidBleConnector(
                     } ?: false
 
                     if (!cleanupCompleted) {
-
-                        // Android did not complete local cleanup
-                        // within the expected time.
+                        // Android did not finish cleanup within the timeout.
                         cleanupController.cleanup()
-
-                        stateBridge.disconnected(
-                            BleDisconnectReason.ConnectionLost
-                        )
                     }
+
+                    // Ensure native cleanup has finished before
+                    // publishing the terminal state.
+                    cleanupController.awaitCleanup()
+
+                    // Completes only an explicitly requested disconnect.
+                    // Does nothing if the connection is already terminal.
+                    stateBridge.completeRequestedDisconnect()
                 }
 
                 try {
@@ -270,14 +271,13 @@ internal class AndroidBleConnector(
 
                 } catch (exception: Exception) {
 
-                    // The native disconnect request failed.
-                    // Close the GATT locally rather than waiting
-                    // for a callback that may never arrive.
+                    // Native disconnect initiation failed.
+                    // Release the local GATT resources.
                     cleanupController.cleanup()
 
-                    stateBridge.disconnected(
-                        BleDisconnectReason.ConnectionLost
-                    )
+                    // The application explicitly requested this disconnect.
+                    // Complete the lifecycle without reporting ConnectionLost.
+                    stateBridge.completeRequestedDisconnect()
                 }
             },
             cleanupCompleted = stateBridge.cleanupCompleted,
@@ -299,6 +299,17 @@ internal class AndroidBleConnector(
 
             config.preferredMtu?.let { mtu ->
                 connected.gatt.requestMtu(mtu)
+            }
+
+            val currentState = connected.state.value
+
+            if (currentState !is BleConnectionState.Connected) {
+                throw BleException(
+                    BleError.Disconnected(
+                        deviceAddress = device.address,
+                        message = "BLE connection was lost during establishment"
+                    )
+                )
             }
 
             connected
@@ -384,13 +395,14 @@ internal class AndroidBleConnector(
 
             if (cleanupController.isCleanupRequested()) return
 
-            val error = BleError.ConnectionFailed(
+            val handled = stateBridge.handleGattError(
                 deviceAddress = device.address,
                 status = status
             )
 
-            cleanupController.cleanup()
-            stateBridge.failed(error)
+            if (handled) {
+                cleanupController.cleanup()
+            }
 
             return
         }
@@ -410,10 +422,15 @@ internal class AndroidBleConnector(
                     deviceAddress = device.address
                 )
 
-                if (cleanupController.isCleanupRequested()) return
-
+                // Always request local cleanup.
+                // GattCleanupController handles duplicate cleanup safely.
                 cleanupController.cleanup()
 
+                // Complete an explicitly requested disconnection.
+                stateBridge.completeRequestedDisconnect()
+
+                // For unexpected disconnections, publish ConnectionLost.
+                // Terminal states are protected against duplicate transitions.
                 stateBridge.disconnected(
                     BleDisconnectReason.ConnectionLost
                 )

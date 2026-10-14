@@ -31,6 +31,7 @@ internal class ConnectionStateBridge {
     private var terminalReason: BleDisconnectReason? = null
 
     private var terminalError: BleError? = null
+    private var connectionEstablished = false
 
     /**
      * Completed when the initial connection succeeds.
@@ -110,6 +111,7 @@ internal class ConnectionStateBridge {
             }
 
             lifecycle = Lifecycle.CONNECTED
+            connectionEstablished = true
 
             connection?.let { current ->
                 current.markConnected()
@@ -209,6 +211,27 @@ internal class ConnectionStateBridge {
     }
 
     /**
+     * Returns true only when the connection is active.
+     *
+     * Thread-safe.
+     */
+    fun isConnected(): Boolean =
+        synchronized(lock) {
+            lifecycle == Lifecycle.CONNECTED
+        }
+
+    /**
+     * Returns true if this connection was successfully
+     * established at least once.
+     *
+     * Thread-safe.
+     */
+    fun wasConnected(): Boolean =
+        synchronized(lock) {
+            connectionEstablished
+        }
+
+    /**
      * Returns true when the connection has reached a
      * terminal lifecycle state.
      */
@@ -217,4 +240,62 @@ internal class ConnectionStateBridge {
             lifecycle == Lifecycle.DISCONNECTED ||
                     lifecycle == Lifecycle.FAILED
         }
+
+    /**
+     * Atomically handles a non-success GATT connection status.
+     *
+     * Returns false if the lifecycle is already terminal
+     * or a local disconnection is in progress.
+     */
+    fun handleGattError(
+        deviceAddress: String,
+        status: Int
+    ): Boolean = synchronized(lock) {
+
+        if (
+            lifecycle == Lifecycle.DISCONNECTED ||
+            lifecycle == Lifecycle.FAILED ||
+            lifecycle == Lifecycle.DISCONNECTING
+        ) {
+            return@synchronized false
+        }
+
+        val result = GattConnectionErrorMapper.map(
+            deviceAddress = deviceAddress,
+            status = status,
+            wasConnected = connectionEstablished
+        )
+
+        when (result) {
+
+            is GattConnectionErrorMapper.Result.Failed -> {
+                failed(result.error)
+            }
+
+            is GattConnectionErrorMapper.Result.Disconnected -> {
+                disconnected(result.reason)
+            }
+        }
+
+        true
+    }
+
+    /**
+     * Completes a disconnection explicitly requested by
+     * the consuming application.
+     *
+     * Idempotent and thread-safe.
+     */
+    fun completeRequestedDisconnect() {
+        synchronized(lock) {
+
+            if (lifecycle != Lifecycle.DISCONNECTING) {
+                return
+            }
+
+            disconnected(
+                BleDisconnectReason.RequestedByUser
+            )
+        }
+    }
 }
